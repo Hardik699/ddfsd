@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { ArrowLeft, Download, TrendingUp } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -211,7 +211,7 @@ export default function DailySalesReport() {
         weeklyRanges.forEach((week) => {
           let weekOnline = 0, weekOffline = 0, weekSupply = 0;
           Object.entries(item.dates).forEach(([dateStr, data]: [string, any]) => {
-            const date = new Date(dateStr);
+            const date = new Date(dateStr + "T00:00:00Z"); // Use UTC to avoid timezone shifts
             if (date >= week.start && date <= week.end) {
               weekOnline  += data.online;
               weekOffline += data.offline;
@@ -283,6 +283,16 @@ export default function DailySalesReport() {
 
 
 
+  // Helper: convert YYYY-MM-DD to month key without timezone issues
+  const getMonthKeyFromDateString = (dateStr: string): string => {
+    // dateStr format: "YYYY-MM-DD"
+    const [year, month] = dateStr.split("-");
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthIndex = parseInt(month) - 1;
+    const shortYear = year.substring(2);
+    return `${monthNames[monthIndex]}-${shortYear}`;
+  };
+
   const downloadMonthlySalesReport = async () => {
     try {
       setLoading(true);
@@ -309,9 +319,8 @@ export default function DailySalesReport() {
         if (!itemMap[itemKey]) {
           itemMap[itemKey] = { itemName: sale.itemName, category: sale.category, group: sale.group || "N/A", itemId: sale.itemId, months: {} };
         }
-        const date = new Date(sale.date);
-        const monthKey = date.toLocaleDateString("en-US", { month: "short", year: "2-digit" }).replace(" ", "-");
-        if (!itemMap[itemKey].months[monthKey]) itemMap[itemKey].months[monthKey] = { online: 0, offline: 0, supply: 0, supplyDates: new Set<string>() };
+        const monthKey = getMonthKeyFromDateString(sale.date);
+        if (!itemMap[itemKey].months[monthKey]) itemMap[itemKey].months[monthKey] = { online: 0, offline: 0, supply: 0 };
         itemMap[itemKey].months[monthKey].online  += (sale.zomatoQty || 0) + (sale.swiggyQty || 0);
         itemMap[itemKey].months[monthKey].offline += (sale.diningQty  || 0) + (sale.parcelQty || 0);
       });
@@ -322,13 +331,12 @@ export default function DailySalesReport() {
         const lastUnderscore = key.lastIndexOf("_");
         const itemId = key.substring(0, lastUnderscore);
         const dateStr = key.substring(lastUnderscore + 1);
-        const date = new Date(dateStr);
-        const monthKey = date.toLocaleDateString("en-US", { month: "short", year: "2-digit" }).replace(" ", "-");
+        const monthKey = getMonthKeyFromDateString(dateStr);
 
         // Find the item in itemMap by itemId
         const itemEntry = Object.values(itemMap).find((item: any) => item.itemId === itemId) as any;
         if (!itemEntry) return;
-        if (!itemEntry.months[monthKey]) itemEntry.months[monthKey] = { online: 0, offline: 0, supply: 0, supplyDates: new Set<string>() };
+        if (!itemEntry.months[monthKey]) itemEntry.months[monthKey] = { online: 0, offline: 0, supply: 0 };
         itemEntry.months[monthKey].supply += qty;
       });
 
