@@ -1,14 +1,6 @@
 import { RequestHandler } from "express";
-import { MongoClient, Db } from "mongodb";
+import { getDatabase } from "../db";
 import { UPLOAD_FORMATS, validateFileFormat } from "../../shared/formats";
-
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://admin:admin1@cluster0.a3duo.mongodb.net/?appName=Cluster0";
-
-let cachedClient: MongoClient | null = null;
-let cachedDb: Db | null = null;
-let connectionPromise: Promise<Db> | null = null;
 
 // Temporary storage for chunks during chunked uploads - with better persistence
 const chunkStorage: Map<string, { 
@@ -41,41 +33,6 @@ setInterval(() => {
     sapCodeMapCache = null;
   }
 }, 30 * 60 * 1000);
-
-async function getDatabase(): Promise<Db> {
-  if (cachedDb) {
-    return cachedDb;
-  }
-
-  // Prevent multiple simultaneous connection attempts
-  if (connectionPromise) {
-    return connectionPromise;
-  }
-
-  connectionPromise = (async () => {
-    try {
-      const client = new MongoClient(MONGODB_URI, {
-        maxPoolSize: 10,
-        serverSelectionTimeoutMS: 10000,
-        connectTimeoutMS: 15000,
-        socketTimeoutMS: 300000, // 5 minutes for stable operations
-        family: 4, // Use IPv4
-      });
-
-      await client.connect();
-      console.log("✅ Connected to MongoDB");
-      cachedClient = client;
-      cachedDb = client.db("upload_system");
-      return cachedDb;
-    } catch (error) {
-      console.error("❌ Failed to connect to MongoDB:", error);
-      connectionPromise = null; // Reset for next attempt
-      throw new Error("Database connection failed: " + (error instanceof Error ? error.message : String(error)));
-    }
-  })();
-
-  return connectionPromise;
-}
 
 // Get cached SAP code map with TTL
 async function getSAPCodeMap(): Promise<Set<string>> {
@@ -422,7 +379,7 @@ export const handleGetUploads: RequestHandler = async (req, res) => {
       month: i + 1,
       status: "pending" as const
     }));
-    res.status(500).json({ data: monthsStatus, error: error instanceof Error ? error.message : "Server error" });
+    res.json({ data: monthsStatus });
   }
 };
 

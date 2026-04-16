@@ -2,12 +2,14 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Package, Upload, CloudUpload, Loader2 } from "lucide-react";
 import UploadTab from "@/components/UploadTab";
+import SupplyNoteUploadTab from "@/components/SupplyNoteUploadTab";
 import { useUploadContext } from "@/hooks/UploadContext";
 
 const UPLOAD_TYPES = [
   { id: "petpooja", label: "Petpooja Upload", color: "bg-blue-600" },
   { id: "pain_lebs", label: "Pain Labs Upload", color: "bg-orange-600" },
-  { id: "website", label: "Website Upload", color: "bg-emerald-500" }
+  { id: "website", label: "Website Upload", color: "bg-emerald-500" },
+  { id: "supply_note", label: "Supply Note Upload", color: "bg-purple-600" }
 ];
 
 const MONTHS = [
@@ -110,7 +112,11 @@ export default function Dashboard() {
         <div className="h-px bg-gradient-to-r from-gray-800 via-gray-700 to-gray-800 mb-8"></div>
 
         {/* Tab Content */}
-        <UploadTab type={currentTab.id} />
+        {currentTab.id === "supply_note" ? (
+          <SupplyNoteUploadTab />
+        ) : (
+          <UploadTab type={currentTab.id} />
+        )}
       </div>
 
       {/* Footer */}

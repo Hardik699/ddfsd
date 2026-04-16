@@ -68,7 +68,9 @@ import {
   handleDebugAllData,
   handleClearAllPetpoojaData,
   handleGetDailyReport,
+  handleGetBulkSales,
 } from "./routes/sales";
+import { handleSupplyNoteUpload, handleSupplyNoteList, handleSupplyNoteStatus, handleSupplyNoteDelete, handleSupplyNoteQtyByItems, handleFixSupplyNoteDates } from "./routes/supply-note";
 
 export function createServer() {
   const app = express();
@@ -184,6 +186,14 @@ export function createServer() {
     });
   });
 
+  // Supply Note routes
+  app.post("/api/supply-note/upload", handleSupplyNoteUpload);
+  app.get("/api/supply-note/status", handleSupplyNoteStatus);
+  app.delete("/api/supply-note/delete", handleSupplyNoteDelete);
+  app.get("/api/supply-note/list", handleSupplyNoteList);
+  app.post("/api/supply-note/qty-by-items", handleSupplyNoteQtyByItems);
+  app.post("/api/supply-note/fix-dates", handleFixSupplyNoteDates);
+
   // Sales routes
   app.get("/api/sales/debug-raw", handleDebugItemSalesRaw);
   app.get("/api/sales/debug-parcel/:itemId", handleDebugParcelData);
@@ -192,6 +202,7 @@ export function createServer() {
   app.get("/api/sales/restaurants", handleGetRestaurants);
   app.get("/api/sales/summary", handleGetSalesSummary);
   app.get("/api/sales/daily-report", handleGetDailyReport);
+  app.post("/api/sales/bulk", handleGetBulkSales);
   app.get("/api/sales/item/:itemId", handleGetItemSales);
   app.get("/api/sales/monthly/:itemId", handleGetMonthlySales);
   app.get("/api/sales/daily/:itemId/:month", handleGetDailySales);

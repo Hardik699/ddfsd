@@ -1,74 +1,6 @@
 import { RequestHandler } from "express";
-import { MongoClient, Db } from "mongodb";
-
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://admin:admin1@cluster0.a3duo.mongodb.net/?appName=Cluster0";
-
-let cachedClient: MongoClient | null = null;
-let cachedDb: Db | null = null;
-import { RequestHandler } from "express";
-import { MongoClient, Db } from "mongodb";
-
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://admin:admin1@cluster0.a3duo.mongodb.net/?appName=Cluster0";
-
-let cachedClient: MongoClient | null = null;
-let cachedDb: Db | null = null;
-let connectionPromise: Promise<Db> | null = null;
-
-async function getDatabase(): Promise<Db> {
-  if (cachedDb) {
-    return cachedDb;
-  }
-
-  if (connectionPromise) {
-    return connectionPromise;
-  }
-
-  connectionPromise = (async () => {
-    try {
-      const client = new MongoClient(MONGODB_URI, {
-        maxPoolSize: 50, // Optimized pool size
-        minPoolSize: 10,
-        serverSelectionTimeoutMS: 15000,
-        connectTimeoutMS: 15000,
-        socketTimeoutMS: 15000,
-        family: 4,
-      });
-
-      await client.connect();
-      console.log("✅ Connected to MongoDB for sales");
-      cachedClient = client;
-      cachedDb = client.db("upload_system");
-      
-      // Create indexes for better performance
-      try {
-        const petpoojaCollection = cachedDb.collection("petpooja");
-        await petpoojaCollection.createIndex({ "data.0": 1 });
-        console.log("✅ Created petpooja indexes");
-      } catch (indexError) {
-        console.warn("⚠️ Failed to create indexes:", indexError);
-      }
-      
-      return cachedDb;
-    } catch (error) {
-      console.error("❌ Failed to connect to MongoDB:", error);
-      connectionPromise = null;
-      throw new Error(
-        "Database connection failed: " +
-          (error instanceof Error ? error.message : String(error)),
-      );
-    }
-  })();
-
-  return connectionPromise;
-}
-
-// Sample sales data structure
-  return connectionPromise;
-}
+import { getDatabase } from "../db";
+import { cache, CACHE_KEYS } from "../cache";
 
 // Sample sales data structure
 interface SalesRecord {
@@ -418,22 +350,13 @@ export const handleGetItemSales: RequestHandler = async (req, res) => {
       });
     }
 
-    // Ultra-fast aggregation pipeline
+    // Fetch all petpooja documents (no limit)
     const petpoojaCollection = db.collection("petpooja");
-    const pipeline = [
-      {
-        $match: {
-          "data.0": { $exists: true } // Only docs with headers
-        }
-      },
-      {
-        $limit: 100 // Limit for ultra-fast processing
-      }
-    ];
+    const results = await petpoojaCollection.find({
+      "data.0": { $exists: true } // Only docs with headers
+    }).toArray();
 
-    const results = await petpoojaCollection.aggregate(pipeline).toArray();
-    
-    // Process results ultra-fast
+    // Process results
     const salesByArea: {
       [key in "zomato" | "swiggy" | "dining" | "parcel"]: {
         [variationName: string]: { quantity: number; value: number };
@@ -448,14 +371,11 @@ export const handleGetItemSales: RequestHandler = async (req, res) => {
     const dailyByArea: { [key: string]: { [area: string]: number } } = {};
     let processedRecords = 0;
 
-    // Ultra-fast processing with early exit
     for (const petpoojaDoc of results) {
-      if (processedRecords > 1000) break; // Speed limit
-      
       if (!Array.isArray(petpoojaDoc.data) || petpoojaDoc.data.length < 2) continue;
 
       const headers = petpoojaDoc.data[0] as string[];
-      const dataRows = petpoojaDoc.data.slice(1, 101); // Limit rows for speed
+      const dataRows = petpoojaDoc.data.slice(1); // All rows, no limit
 
       const getColumnIndex = (headers: string[], name: string) =>
         headers.findIndex((h) => h.toLowerCase().trim() === name.toLowerCase().trim());
@@ -523,13 +443,23 @@ export const handleGetItemSales: RequestHandler = async (req, res) => {
       };
     };
 
-    // Build minimal monthly data
-    const monthlyData = Object.entries(dailyByArea)
-      .slice(0, 12) // Last 12 months max
-      .map(([date, areas]) => {
-        const monthDate = new Date(date);
-        const monthName = monthDate.toLocaleDateString("en-US", { month: "short" });
-        
+    // Build monthly data - aggregate by month properly
+    const monthlyByArea: { [monthKey: string]: { [area: string]: number } } = {};
+    for (const [date, areas] of Object.entries(dailyByArea)) {
+      const d = new Date(date);
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      if (!monthlyByArea[monthKey]) monthlyByArea[monthKey] = {};
+      for (const [area, qty] of Object.entries(areas)) {
+        monthlyByArea[monthKey][area] = (monthlyByArea[monthKey][area] || 0) + qty;
+      }
+    }
+
+    const monthlyData = Object.entries(monthlyByArea)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([monthKey, areas]) => {
+        const [year, month] = monthKey.split("-");
+        const monthName = new Date(parseInt(year), parseInt(month) - 1, 1)
+          .toLocaleDateString("en-US", { month: "short", year: "2-digit" });
         return {
           month: monthName,
           zomatoQty: Math.round((areas.zomato || 0) * 100) / 100,
@@ -540,10 +470,9 @@ export const handleGetItemSales: RequestHandler = async (req, res) => {
         };
       });
 
-    // Build minimal daily data
+    // Build daily data - all dates within range, sorted
     const dateWiseData = Object.entries(dailyByArea)
       .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
-      .slice(-90) // Last 90 days only for speed
       .map(([date, areas]) => ({
         date,
         zomatoQty: Math.round((areas.zomato || 0) * 100) / 100,
@@ -567,7 +496,7 @@ export const handleGetItemSales: RequestHandler = async (req, res) => {
     // Cache for ultra-fast future requests (10 minutes)
     cache.set(cacheKey, salesData, 600);
 
-    console.log(`⚡ ULTRA-FAST: Processed ${processedRecords} records for ${itemId}`);
+    console.log(`✅ Processed ${processedRecords} records for ${itemId} across ${results.length} documents`);
 
     res.json({
       success: true,
@@ -576,345 +505,6 @@ export const handleGetItemSales: RequestHandler = async (req, res) => {
   } catch (error) {
     console.error("Error in ultra-fast handleGetItemSales:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({
-      success: false,
-      error: errorMessage,
-    });
-  }
-};
-  try {
-    const { itemId } = req.params;
-    const { startDate, endDate, restaurant } = req.query;
-
-    // Parse dates
-    let start: Date, end: Date;
-
-    if (startDate && endDate) {
-      const parsedStart = parseDate(startDate as string);
-      const parsedEnd = parseDate(endDate as string);
-
-      if (!parsedStart || !parsedEnd) {
-        start = new Date("2000-01-01");
-        end = new Date("2099-12-31");
-      } else {
-        start = parsedStart;
-        end = new Date(parsedEnd.getTime() + 24 * 60 * 60 * 1000 - 1);
-      }
-    } else {
-      start = new Date("2000-01-01");
-      end = new Date("2099-12-31");
-    }
-
-    const db = await getDatabase();
-
-    // Get the item to find all its SAP codes
-    const itemsCollection = db.collection("items");
-    const item = await itemsCollection.findOne({ itemId });
-
-    if (!item) {
-      return res.json({
-        success: true,
-        data: {
-          itemId,
-          zomatoData: { quantity: 0, value: 0, variations: [] },
-          swiggyData: { quantity: 0, value: 0, variations: [] },
-          diningData: { quantity: 0, value: 0, variations: [] },
-          parcelData: { quantity: 0, value: 0, variations: [] },
-          monthlyData: [],
-          dateWiseData: [],
-          restaurantSales: {},
-        },
-      });
-    }
-
-    // Build a map of SAP codes for this item
-    const sapCodeToVariation: { [sapCode: string]: { name: string; saleType: string } } = {};
-    if (item.variations && Array.isArray(item.variations)) {
-      item.variations.forEach((variation: any, idx: number) => {
-        if (variation.sapCode) {
-          const variationName = variation.value || variation.name || `Variation ${idx + 1}`;
-          sapCodeToVariation[variation.sapCode] = {
-            name: variationName,
-            saleType: variation.saleType || "QTY",
-          };
-        }
-      });
-    }
-
-    const sapCodes = Object.keys(sapCodeToVariation);
-    console.log(
-      `📊 Fetching sales for item ${itemId} from petpooja collection`,
-    );
-    console.log(`  SAP codes: ${sapCodes.join(", ")}`);
-    console.log(`  Date range: ${start.toISOString()} to ${end.toISOString()}`);
-
-    if (sapCodes.length === 0) {
-      return res.json({
-        success: true,
-        data: {
-          itemId,
-          zomatoData: { quantity: 0, value: 0, variations: [] },
-          swiggyData: { quantity: 0, value: 0, variations: [] },
-          diningData: { quantity: 0, value: 0, variations: [] },
-          parcelData: { quantity: 0, value: 0, variations: [] },
-          monthlyData: [],
-          dateWiseData: [],
-          restaurantSales: {},
-        },
-      });
-    }
-
-    // Query petpooja collection directly using cursor (streaming, not .toArray())
-    const petpoojaCollection = db.collection("petpooja");
-
-    // Process all data and aggregate
-    const salesByArea: {
-      [key in "zomato" | "swiggy" | "dining" | "parcel"]: {
-        [variationName: string]: { quantity: number; value: number };
-      };
-    } = {
-      zomato: {},
-      swiggy: {},
-      dining: {},
-      parcel: {},
-    };
-
-    const monthlyByArea: { [key: string]: { [area: string]: { [variation: string]: { quantity: number; value: number } } } } = {};
-    const dailyByArea: { [key: string]: { [area: string]: number } } = {};
-    const restaurantSales: { [key: string]: number } = {};
-
-    let totalRecords = 0;
-    let matchedRecords = 0;
-    let dateFilterSkipped = 0;
-
-    // Helper to get column index
-    const getColumnIndex = (headers: string[], name: string) =>
-      headers.findIndex((h) => h.toLowerCase().trim() === name.toLowerCase().trim());
-
-    // Use cursor to stream documents one by one - avoids loading all into memory
-    const cursor = petpoojaCollection.find({}, { projection: { data: 1 } });
-
-    for await (const petpoojaDoc of cursor) {
-      if (!Array.isArray(petpoojaDoc.data) || petpoojaDoc.data.length < 2) continue;
-
-      const headers = petpoojaDoc.data[0] as string[];
-      const dataRows = petpoojaDoc.data.slice(1);
-
-      const sapCodeIdx = getColumnIndex(headers, "sap_code");
-      const restaurantIdx = getColumnIndex(headers, "restaurant_name");
-      const dateIdx = getColumnIndex(headers, "New Date");
-      const areaIdx = getColumnIndex(headers, "area");
-      const orderTypeIdx = getColumnIndex(headers, "order_type");
-      const quantityIdx = getColumnIndex(headers, "item_quantity");
-      const priceIdx = getColumnIndex(headers, "item_price");
-
-      // Debug: Log missing columns
-      if (dateIdx === -1) {
-        console.warn("⚠️ WARNING: 'New Date' column not found in petpooja data");
-        console.warn("  Available headers:", headers.join(", "));
-      }
-
-      if (sapCodeIdx === -1) continue;
-
-      for (const row of dataRows) {
-        if (!Array.isArray(row)) continue;
-
-        totalRecords++;
-        const sapCode = row[sapCodeIdx]?.toString().trim() || "";
-
-        // Only process rows matching this item's SAP codes
-        if (!sapCodeToVariation[sapCode]) continue;
-
-        const dateStr = row[dateIdx]?.toString().trim() || "";
-        const recordDate = parseDate(dateStr);
-
-        // Filter by date range
-        if (!recordDate || recordDate < start || recordDate > end) {
-          if (!recordDate) {
-            // Log a few examples of unparseable dates
-            if (dateFilterSkipped < 3) {
-              console.warn(`⚠️ Could not parse date: "${dateStr}"`);
-            }
-          } else {
-            // Log a few examples of dates outside range
-            if (dateFilterSkipped < 3) {
-              console.warn(`⚠️ Date outside range: ${recordDate.toISOString()} not in [${start.toISOString()}, ${end.toISOString()}]`);
-            }
-          }
-          dateFilterSkipped++;
-          continue;
-        }
-
-        const restaurantName = restaurantIdx !== -1 ? row[restaurantIdx]?.toString().trim() || "Unknown" : "Unknown";
-
-        // Filter by restaurant if provided
-        if (restaurant && restaurantName !== restaurant) continue;
-
-        matchedRecords++;
-
-        const quantity = quantityIdx !== -1 ? parseFloat(row[quantityIdx]?.toString() || "0") || 0 : 0;
-        const price = priceIdx !== -1 ? parseFloat(row[priceIdx]?.toString() || "0") || 0 : 0;
-        const value = Math.round(quantity * price);
-
-        const area = areaIdx !== -1 ? row[areaIdx]?.toString().trim() || "" : "";
-        const orderType = orderTypeIdx !== -1 ? row[orderTypeIdx]?.toString().trim() || "" : "";
-        const normalizedArea = normalizeArea(area, orderType) as
-          | "zomato"
-          | "swiggy"
-          | "dining"
-          | "parcel";
-
-        const variationInfo = sapCodeToVariation[sapCode];
-        const variationName = variationInfo.name;
-        const saleType = variationInfo.saleType;
-        const kgFactor = saleType === "KG" ? getKgFactor(variationName) : 1;
-        const adjustedQuantity = quantity * kgFactor;
-
-        // Aggregate by area & variation
-        if (!salesByArea[normalizedArea][variationName]) {
-          salesByArea[normalizedArea][variationName] = { quantity: 0, value: 0 };
-        }
-        salesByArea[normalizedArea][variationName].quantity += adjustedQuantity;
-        salesByArea[normalizedArea][variationName].value += value;
-
-        // Aggregate by month & area & variation
-        const month = recordDate.toISOString().substring(0, 7);
-        if (!monthlyByArea[month]) monthlyByArea[month] = {};
-        if (!monthlyByArea[month][normalizedArea]) monthlyByArea[month][normalizedArea] = {};
-        if (!monthlyByArea[month][normalizedArea][variationName]) {
-          monthlyByArea[month][normalizedArea][variationName] = { quantity: 0, value: 0 };
-        }
-        monthlyByArea[month][normalizedArea][variationName].quantity += adjustedQuantity;
-        monthlyByArea[month][normalizedArea][variationName].value += value;
-
-        // Aggregate by day & area
-        const day = recordDate.toISOString().substring(0, 10);
-        if (!dailyByArea[day]) dailyByArea[day] = {};
-        dailyByArea[day][normalizedArea] =
-          (dailyByArea[day][normalizedArea] || 0) + adjustedQuantity;
-
-        // Aggregate by restaurant
-        restaurantSales[restaurantName] =
-          (restaurantSales[restaurantName] || 0) + adjustedQuantity;
-      }
-    }
-
-    // Format data for output
-    const formatAreaData = (
-      data: { [variationName: string]: { quantity: number; value: number } },
-    ) => {
-      const variations = Object.entries(data).map(([variationName, info]) => ({
-        name: variationName,
-        quantity: info.quantity,
-        value: info.value,
-      }));
-
-      return {
-        quantity: variations.reduce((sum, v) => sum + v.quantity, 0),
-        value: variations.reduce((sum, v) => sum + v.value, 0),
-        variations,
-      };
-    };
-
-    // Build monthly chart data
-    const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const monthlyData = Object.entries(monthlyByArea)
-      .sort(([monthA], [monthB]) => monthA.localeCompare(monthB))
-      .map(([month, areas]) => {
-        // Convert "2025-03" format to "Mar"
-        const monthNum = parseInt(month.split('-')[1], 10);
-        const monthName = MONTH_NAMES[monthNum - 1] || month;
-
-        // Calculate totals and variations for each area
-        const zomatoVariations = Object.entries(areas.zomato || {}).map(([varName, data]) => ({
-          name: varName,
-          quantity: data.quantity,
-          value: data.value,
-        }));
-        const swiggyVariations = Object.entries(areas.swiggy || {}).map(([varName, data]) => ({
-          name: varName,
-          quantity: data.quantity,
-          value: data.value,
-        }));
-        const diningVariations = Object.entries(areas.dining || {}).map(([varName, data]) => ({
-          name: varName,
-          quantity: data.quantity,
-          value: data.value,
-        }));
-        const parcelVariations = Object.entries(areas.parcel || {}).map(([varName, data]) => ({
-          name: varName,
-          quantity: data.quantity,
-          value: data.value,
-        }));
-
-        const zomatoQty = zomatoVariations.reduce((sum, v) => sum + v.quantity, 0);
-        const swiggyQty = swiggyVariations.reduce((sum, v) => sum + v.quantity, 0);
-        const diningQty = diningVariations.reduce((sum, v) => sum + v.quantity, 0);
-        const parcelQty = parcelVariations.reduce((sum, v) => sum + v.quantity, 0);
-
-        return {
-          month: monthName,
-          zomatoQty,
-          swiggyQty,
-          diningQty,
-          parcelQty,
-          totalQty: zomatoQty + swiggyQty + diningQty + parcelQty,
-          variations: {
-            zomato: zomatoVariations,
-            swiggy: swiggyVariations,
-            dining: diningVariations,
-            parcel: parcelVariations,
-          },
-        };
-      });
-
-    // Build daily chart data
-    const dateWiseData = Object.entries(dailyByArea)
-      .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
-      .map(([date, areas]) => ({
-        date,
-        zomatoQty: areas.zomato || 0,
-        swiggyQty: areas.swiggy || 0,
-        diningQty: areas.dining || 0,
-        parcelQty: areas.parcel || 0,
-        totalQty:
-          (areas.zomato || 0) +
-          (areas.swiggy || 0) +
-          (areas.dining || 0) +
-          (areas.parcel || 0),
-      }));
-
-    const salesData = {
-      itemId,
-      zomatoData: formatAreaData(salesByArea.zomato),
-      swiggyData: formatAreaData(salesByArea.swiggy),
-      diningData: formatAreaData(salesByArea.dining),
-      parcelData: formatAreaData(salesByArea.parcel),
-      monthlyData,
-      dateWiseData,
-      restaurantSales,
-    };
-
-    const responseSize = JSON.stringify(salesData).length;
-    console.log(`✅ Sales data for ${itemId}:`, {
-      totalRecords,
-      matchedRecords,
-      dateFilterSkipped,
-      responseSizeKB: (responseSize / 1024).toFixed(2),
-      zomato: salesData.zomatoData.quantity,
-      swiggy: salesData.swiggyData.quantity,
-      dining: salesData.diningData.quantity,
-      parcel: salesData.parcelData.quantity,
-    });
-
-    res.json({
-      success: true,
-      data: salesData,
-    });
-  } catch (error) {
-    console.error("Error in handleGetItemSales:", error);
-    const errorMessage =
-      error instanceof Error ? error.message : "Unknown error";
     res.status(500).json({
       success: false,
       error: errorMessage,
@@ -1474,10 +1064,7 @@ export const handleGetRestaurants: RequestHandler = async (req, res) => {
 
       if (restaurantIdx === -1) continue;
 
-      // Sample only first 100 rows per document for speed
-      const sampleRows = dataRows.slice(0, 100);
-
-      for (const row of sampleRows) {
+      for (const row of dataRows) {
         if (!Array.isArray(row)) continue;
 
         const restaurantName = row[restaurantIdx]?.toString().trim();
@@ -1580,6 +1167,143 @@ export const handleClearAllPetpoojaData: RequestHandler = async (req, res) => {
     res.status(500).json({
       success: false,
       error: errorMessage,
+    });
+  }
+};
+
+// POST /api/sales/bulk - Get sales data for multiple items in ONE query (FAST!)
+export const handleGetBulkSales: RequestHandler = async (req, res) => {
+  try {
+    const { itemIds, startDate, endDate } = req.body;
+
+    if (!itemIds || !Array.isArray(itemIds) || itemIds.length === 0) {
+      return res.status(400).json({ success: false, error: "itemIds array required" });
+    }
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: "startDate and endDate required" });
+    }
+
+    const start = parseDate(startDate as string);
+    const end = parseDate(endDate as string);
+    if (!start || !end) {
+      return res.status(400).json({ success: false, error: "Invalid date format" });
+    }
+
+    console.log(`📊 Bulk sales: ${itemIds.length} items, ${startDate} to ${endDate}`);
+
+    const db = await getDatabase();
+    const itemsCollection = db.collection("items");
+    const petpoojaCollection = db.collection("petpooja");
+
+    // Fetch all requested items in ONE query
+    const items = await itemsCollection.find({ itemId: { $in: itemIds } }).toArray();
+    console.log(`📋 Found ${items.length} items`);
+
+    // Build SAP code → item mapping
+    const sapToItem = new Map<string, any>();
+    items.forEach((item: any) => {
+      if (item.variations && Array.isArray(item.variations)) {
+        item.variations.forEach((v: any) => {
+          if (v.sapCode) {
+            sapToItem.set(v.sapCode, {
+              itemId: item.itemId,
+              itemName: item.itemName,
+              category: item.category,
+              group: item.group,
+              variationName: v.value || v.name,
+              saleType: v.saleType || "QTY",
+            });
+          }
+        });
+      }
+    });
+
+    console.log(`🔑 SAP codes mapped: ${sapToItem.size}`);
+
+    // Fetch ALL petpooja docs in ONE query
+    const petpoojaDocs = await petpoojaCollection.find({}).toArray();
+    console.log(`📦 Petpooja docs: ${petpoojaDocs.length}`);
+
+    const getColumnIndex = (headers: string[], name: string) =>
+      headers.findIndex((h: string) => h?.toLowerCase().trim() === name.toLowerCase().trim());
+
+    // Aggregate: itemId_date → { zomato, swiggy, dining, parcel }
+    const resultMap = new Map<string, any>();
+    let totalRows = 0;
+    let matchedRows = 0;
+
+    for (const doc of petpoojaDocs) {
+      if (!Array.isArray(doc.data) || doc.data.length < 2) continue;
+
+      const headers = doc.data[0] as string[];
+      const dataRows = doc.data.slice(1);
+
+      const dateIdx = getColumnIndex(headers, "New Date");
+      const sapIdx = getColumnIndex(headers, "sap_code");
+      const areaIdx = getColumnIndex(headers, "area");
+      const orderTypeIdx = getColumnIndex(headers, "order_type");
+      const qtyIdx = getColumnIndex(headers, "item_quantity");
+
+      if (dateIdx === -1 || sapIdx === -1) continue;
+
+      for (const row of dataRows) {
+        if (!Array.isArray(row)) continue;
+        totalRows++;
+
+        const sapCode = row[sapIdx]?.toString().trim() || "";
+        const itemInfo = sapToItem.get(sapCode);
+        if (!itemInfo) continue;
+
+        const dateStr = row[dateIdx]?.toString().trim() || "";
+        const recordDate = parseDate(dateStr);
+        if (!recordDate || recordDate < start || recordDate > end) continue;
+
+        matchedRows++;
+
+        const qty = qtyIdx !== -1 ? parseFloat(row[qtyIdx]?.toString() || "0") || 0 : 0;
+        const area = areaIdx !== -1 ? row[areaIdx]?.toString().trim() || "" : "";
+        const orderType = orderTypeIdx !== -1 ? row[orderTypeIdx]?.toString().trim() || "" : "";
+        const channel = normalizeArea(area, orderType);
+
+        const kgFactor = itemInfo.saleType === "KG" ? getKgFactor(itemInfo.variationName) : 1;
+        const adjustedQty = qty * kgFactor;
+
+        const dateKey = recordDate.toISOString().split("T")[0];
+        const key = `${itemInfo.itemId}_${dateKey}`;
+
+        if (!resultMap.has(key)) {
+          resultMap.set(key, {
+            itemId: itemInfo.itemId,
+            itemName: itemInfo.itemName,
+            category: itemInfo.category,
+            group: itemInfo.group,
+            date: dateKey,
+            zomatoQty: 0, swiggyQty: 0, diningQty: 0, parcelQty: 0,
+          });
+        }
+
+        const rec = resultMap.get(key);
+        if (channel === "zomato") rec.zomatoQty += adjustedQty;
+        else if (channel === "swiggy") rec.swiggyQty += adjustedQty;
+        else if (channel === "dining") rec.diningQty += adjustedQty;
+        else if (channel === "parcel") rec.parcelQty += adjustedQty;
+      }
+    }
+
+    console.log(`✅ Bulk: processed ${totalRows} rows, matched ${matchedRows}`);
+
+    const data = Array.from(resultMap.values()).sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return a.itemName.localeCompare(b.itemName);
+    });
+
+    res.json({ success: true, data, count: data.length });
+  } catch (error) {
+    console.error("❌ Bulk sales error:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
     });
   }
 };

@@ -1,69 +1,6 @@
 import { RequestHandler } from "express";
-import { MongoClient, Db } from "mongodb";
-import { cache, CACHE_KEYS } from "./cache";
-
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://admin:admin1@cluster0.a3duo.mongodb.net/?appName=Cluster0";
-
-let cachedClient: MongoClient | null = null;
-let cachedDb: Db | null = null;
-let connectionPromise: Promise<Db> | null = null;
-
-async function getDatabase(): Promise<Db> {
-  if (cachedDb) {
-    return cachedDb;
-  }
-
-  if (connectionPromise) {
-    return connectionPromise;
-  }
-
-  connectionPromise = (async () => {
-    try {
-      const client = new MongoClient(MONGODB_URI, {
-        maxPoolSize: 50, // Increased pool size
-        minPoolSize: 10,
-        serverSelectionTimeoutMS: 5000, // Faster timeout
-        connectTimeoutMS: 5000,
-        socketTimeoutMS: 10000,
-        family: 4,
-        maxIdleTimeMS: 30000,
-        waitQueueTimeoutMS: 5000,
-      });
-
-      await client.connect();
-      console.log("✅ Connected to MongoDB for items (ULTRA FAST MODE)");
-      cachedClient = client;
-      cachedDb = client.db("upload_system");
-      
-      // Create compound indexes for ultra-fast queries
-      try {
-        const itemsCollection = cachedDb.collection("items");
-        await Promise.all([
-          itemsCollection.createIndex({ itemId: 1 }),
-          itemsCollection.createIndex({ category: 1, group: 1 }),
-          itemsCollection.createIndex({ itemName: "text", category: "text", group: "text" }),
-          itemsCollection.createIndex({ updatedAt: -1 }),
-        ]);
-        console.log("✅ Created ultra-fast indexes");
-      } catch (indexError) {
-        console.warn("⚠️ Index creation warning:", indexError);
-      }
-      
-      return cachedDb;
-    } catch (error) {
-      console.error("❌ Failed to connect to MongoDB:", error);
-      connectionPromise = null;
-      throw new Error(
-        "Database connection failed: " +
-          (error instanceof Error ? error.message : String(error)),
-      );
-    }
-  })();
-
-  return connectionPromise;
-}
+import { getDatabase } from "../db";
+import { cache, CACHE_KEYS } from "../cache";
 
 // Create or get items collection
 async function getItemsCollection() {
@@ -101,6 +38,7 @@ export const handleGetItems: RequestHandler = async (req, res) => {
         unitType: 1,
         saleType: 1,
         itemType: 1,
+        supplyNoteSku: 1,
         variations: {
           $slice: ["$variations", 10] // Limit variations for speed
         },
@@ -218,7 +156,9 @@ export const handleCreateItem: RequestHandler = async (req, res) => {
       `✅ Item ${item.itemId} created with MongoDB ID:`,
       result.insertedId,
     );
-    console.log(`📝 Response includes itemId:`, item.itemId);
+
+    // Invalidate cache
+    cache.delete(CACHE_KEYS.ITEMS_ALL);
 
     // Ensure itemId is included in the response
     const responseItem = { ...item, _id: result.insertedId };
@@ -330,12 +270,15 @@ export const handleUpdateItem: RequestHandler = async (req, res) => {
       return res.status(404).json({ error: "Item not found" });
     }
 
+    // Invalidate cache so next fetch gets fresh data
+    cache.delete(CACHE_KEYS.ITEMS_ALL);
+    console.log("🗑️ Cache invalidated after item update");
+
     // Save change log
     try {
       const db = await getDatabase();
       const logsCollection = db.collection("itemLogs");
       const changes = computeDiff(oldItem, updateData);
-      // Always log the update, even if diff is empty (to track all saves)
       await logsCollection.insertOne({
         itemId,
         itemName: oldItem.itemName,
@@ -516,6 +459,7 @@ export const handleDeleteItem: RequestHandler = async (req, res) => {
     }
 
     console.log(`✅ Item ${itemId} deleted successfully`);
+    cache.delete(CACHE_KEYS.ITEMS_ALL);
     res.json({ message: "Item deleted successfully", deletedCount: result.deletedCount });
   } catch (error) {
     console.error(`❌ Error deleting item ${req.params.itemId}:`, error);

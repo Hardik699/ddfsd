@@ -169,18 +169,18 @@ export default function ItemEdit() {
         setLoading(true);
         setError(null);
 
-        const response = await fetch("/api/items");
+        // Fetch single item directly by ID
+        const response = await fetch(`/api/items/${itemId}`);
         if (!response.ok) {
-          throw new Error("Failed to fetch items");
-        }
-
-        const items = await response.json();
-        const foundItem = items.find((i: any) => i.itemId === itemId);
-
-        if (!foundItem) {
-          setError(`Item with ID "${itemId}" not found`);
+          if (response.status === 404) {
+            setError(`Item with ID "${itemId}" not found`);
+          } else {
+            throw new Error("Failed to fetch item");
+          }
           return;
         }
+
+        const foundItem = await response.json();
 
         // Populate form with item data
         setItemName(foundItem.itemName);

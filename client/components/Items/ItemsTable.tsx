@@ -138,7 +138,14 @@ export default function ItemsTable({ items, onDelete, onSelectedChange }: ItemsT
               </th>
               <th
                 rowSpan={2}
-                style={{ position: "sticky", top: 0, left: 434, zIndex: 40, background: "#0f172a", minWidth: 52, boxShadow: "4px 0 16px rgba(0,0,0,0.6)" }}
+                style={{ position: "sticky", top: 0, left: 434, zIndex: 40, background: "#0f172a", minWidth: 110 }}
+                className="px-3 py-3 text-center border-r border-b border-slate-700/50"
+              >
+                SKU
+              </th>
+              <th
+                rowSpan={2}
+                style={{ position: "sticky", top: 0, left: 544, zIndex: 40, background: "#0f172a", minWidth: 52, boxShadow: "4px 0 16px rgba(0,0,0,0.6)" }}
                 className="px-2 py-3 text-center border-r border-b border-slate-700/50"
               >
                 Action
@@ -213,7 +220,19 @@ export default function ItemsTable({ items, onDelete, onSelectedChange }: ItemsT
                     {item.category}
                   </td>
                   <td
-                    style={{ position: "sticky", left: 434, zIndex: 10, background: bg, minWidth: 52, boxShadow: "4px 0 16px rgba(0,0,0,0.6)" }}
+                    style={{ position: "sticky", left: 434, zIndex: 10, background: bg, minWidth: 110 }}
+                    className="px-3 py-3 text-center border-r border-slate-700/40"
+                  >
+                    {item.supplyNoteSku ? (
+                      <span className="text-purple-300 font-mono text-[11px] bg-purple-900/30 px-2 py-0.5 rounded border border-purple-700/40">
+                        {item.supplyNoteSku}
+                      </span>
+                    ) : (
+                      <span className="text-slate-600 text-[11px]">—</span>
+                    )}
+                  </td>
+                  <td
+                    style={{ position: "sticky", left: 544, zIndex: 10, background: bg, minWidth: 52, boxShadow: "4px 0 16px rgba(0,0,0,0.6)" }}
                     className="px-2 py-3 text-center border-r border-slate-700/40"
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -261,6 +280,12 @@ export default function ItemsTable({ items, onDelete, onSelectedChange }: ItemsT
             <div className="grid grid-cols-2 gap-2 text-xs mb-3">
               <div><p className="text-gray-400">Group</p><p className="text-gray-200">{item.group}</p></div>
               <div><p className="text-gray-400">Category</p><p className="text-gray-200">{item.category}</p></div>
+              {item.supplyNoteSku && (
+                <div className="col-span-2">
+                  <p className="text-gray-400">Supply Note SKU</p>
+                  <p className="text-purple-300 font-mono">{item.supplyNoteSku}</p>
+                </div>
+              )}
             </div>
             {variations.length > 0 && (
               <div className="pt-2 border-t border-slate-700/40">

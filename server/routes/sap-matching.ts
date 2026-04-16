@@ -1,22 +1,5 @@
 import { RequestHandler } from "express";
-import { MongoClient, Db } from "mongodb";
-
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://admin:admin1@cluster0.a3duo.mongodb.net/?appName=Cluster0";
-
-let cachedDb: Db | null = null;
-
-async function getDatabase(): Promise<Db> {
-  if (cachedDb) {
-    return cachedDb;
-  }
-
-  const client = new MongoClient(MONGODB_URI);
-  await client.connect();
-  cachedDb = client.db("upload_system");
-  return cachedDb;
-}
+import { getDatabase } from "../db";
 
 // Get all SAP codes from uploaded data
 export const handleGetAllSapCodes: RequestHandler = async (req, res) => {

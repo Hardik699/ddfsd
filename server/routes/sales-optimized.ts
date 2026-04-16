@@ -1,28 +1,5 @@
 import { RequestHandler } from "express";
-import { MongoClient, Db } from "mongodb";
-
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://admin:admin1@cluster0.a3duo.mongodb.net/?appName=Cluster0";
-
-let cachedClient: MongoClient | null = null;
-let cachedDb: Db | null = null;
-
-async function getDatabase(): Promise<Db> {
-  if (cachedDb) return cachedDb;
-
-  const client = new MongoClient(MONGODB_URI, {
-    maxPoolSize: 50,
-    minPoolSize: 10,
-    maxIdleTimeMS: 30000,
-  });
-
-  await client.connect();
-  cachedClient = client;
-  cachedDb = client.db("upload_system");
-  
-  // Create indexes for fast queries
-  await ensureIndexes(cachedDb);
+import { getDatabase } from "../db";
   
   return cachedDb;
 }

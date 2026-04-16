@@ -106,6 +106,17 @@ export const UPLOAD_FORMATS = {
       "Date"
     ],
     description: "Website format with Page Title, URL, Visits, Bounce Rate, Avg Duration, and Date"
+  },
+  supply_note: {
+    name: "Supply Note Upload",
+    requiredColumns: [
+      "Sku Code",
+      "Indent No.",
+      "Delivery Location",
+      "Invoice Date",
+      "Received Qty"
+    ],
+    description: "Supply note format with SKU Code, Indent No., Delivery Location, Invoice Date, and Received Qty"
   }
 } as const;
 
