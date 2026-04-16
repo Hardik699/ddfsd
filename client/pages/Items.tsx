@@ -58,11 +58,11 @@ export default function Items() {
         if (isMounted) setLoading(true);
         console.log("⚡ ULTRA-FAST: Fetching items...");
 
-        // Ultra-fast timeout for immediate feedback
+        // Timeout for large items payload (995 items = ~500KB)
         timeoutId = setTimeout(() => {
-          console.log("⏱️ Ultra-fast timeout after 5 seconds");
-          controller.abort(new Error("Request timeout after 5 seconds"));
-        }, 5000);
+          console.log("⏱️ Request timeout after 20 seconds");
+          controller.abort(new Error("Request timeout after 20 seconds"));
+        }, 20000);
 
         const response = await fetch("/api/items", {
           signal: controller.signal,
