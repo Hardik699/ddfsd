@@ -58,17 +58,18 @@ export default function UploadTab({ type }: UploadTabProps) {
   useEffect(() => {
     let isMounted = true;
     let timeoutId: NodeJS.Timeout | null = null;
+    let retryTimeoutId: NodeJS.Timeout | null = null;
 
-    const fetchMonthStatus = async () => {
+    const fetchMonthStatus = async (retryCount = 0) => {
       const controller = new AbortController();
+      const MAX_RETRIES = 2;
+      const TIMEOUT_MS = 10000; // 10 seconds
 
       try {
-        console.log(`Fetching month status for ${type} year ${selectedYear}`);
-
-        // Add a timeout for the fetch request (30 seconds)
+        // Add a timeout for the fetch request
         timeoutId = setTimeout(() => {
           controller.abort();
-        }, 30000);
+        }, TIMEOUT_MS);
 
         const response = await fetch(`/api/uploads?type=${type}&year=${selectedYear}`, {
           signal: controller.signal
@@ -80,19 +81,18 @@ export default function UploadTab({ type }: UploadTabProps) {
         }
 
         if (!response.ok) {
-          console.warn(`API returned status ${response.status}`);
-          if (isMounted) {
-            setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
-              month: i + 1,
-              status: "pending" as const
-            })));
-          }
-          return;
+          throw new Error(`API returned status ${response.status}`);
         }
 
         const data = await response.json();
         if (isMounted && data.data && Array.isArray(data.data)) {
           setMonthsStatus(data.data);
+        } else if (isMounted) {
+          // Set default if no data returned
+          setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
+            month: i + 1,
+            status: "pending" as const
+          })));
         }
       } catch (error) {
         if (timeoutId) {
@@ -101,14 +101,27 @@ export default function UploadTab({ type }: UploadTabProps) {
         }
 
         if (error instanceof Error && error.name === "AbortError") {
-          // Silently ignore abort errors (timeout or cleanup)
+          // Timeout occurred - retry if we haven't exceeded max retries
+          if (retryCount < MAX_RETRIES && isMounted) {
+            console.warn(`Month status fetch timeout, retrying... (${retryCount + 1}/${MAX_RETRIES})`);
+            retryTimeoutId = setTimeout(() => {
+              if (isMounted) {
+                fetchMonthStatus(retryCount + 1);
+              }
+            }, 1000 * (retryCount + 1));
+          } else if (isMounted) {
+            // Max retries exceeded, set default status
+            setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
+              month: i + 1,
+              status: "pending" as const
+            })));
+          }
           return;
         }
 
-        // Only log if not cleaned up
+        // Other errors - set default and don't block UI
         if (isMounted) {
-          console.error("Failed to fetch month status:", error);
-          // Set default pending status on fetch error - don't block UI
+          console.warn("Failed to fetch month status:", error instanceof Error ? error.message : error);
           setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
             month: i + 1,
             status: "pending" as const
@@ -121,9 +134,8 @@ export default function UploadTab({ type }: UploadTabProps) {
 
     return () => {
       isMounted = false;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      if (timeoutId) clearTimeout(timeoutId);
+      if (retryTimeoutId) clearTimeout(retryTimeoutId);
     };
   }, [type, selectedYear]);
 
@@ -533,18 +545,26 @@ export default function UploadTab({ type }: UploadTabProps) {
 
     // Refresh status after a moment
     setTimeout(() => {
-      try {
-        fetch(`/api/uploads?type=${type}&year=${selectedYear}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.data) {
-              setMonthsStatus(data.data);
-            }
-          })
-          .catch(err => console.error("Failed to refresh status:", err));
-      } catch (e) {
-        console.error("Failed to refresh status:", e);
-      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      fetch(`/api/uploads?type=${type}&year=${selectedYear}`, { signal: controller.signal })
+        .then(res => {
+          clearTimeout(timeoutId);
+          if (res.ok) return res.json();
+          throw new Error(`Status ${res.status}`);
+        })
+        .then(data => {
+          if (data.data) {
+            setMonthsStatus(data.data);
+          }
+        })
+        .catch(err => {
+          clearTimeout(timeoutId);
+          if (err instanceof Error && err.name !== "AbortError") {
+            console.warn("Failed to refresh status:", err);
+          }
+        });
     }, 1000);
   };
 
@@ -577,18 +597,26 @@ export default function UploadTab({ type }: UploadTabProps) {
 
     // Refresh status after a moment
     setTimeout(() => {
-      try {
-        fetch(`/api/uploads?type=${type}&year=${selectedYear}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.data) {
-              setMonthsStatus(data.data);
-            }
-          })
-          .catch(err => console.error("Failed to refresh status:", err));
-      } catch (e) {
-        console.error("Failed to refresh status:", e);
-      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      fetch(`/api/uploads?type=${type}&year=${selectedYear}`, { signal: controller.signal })
+        .then(res => {
+          clearTimeout(timeoutId);
+          if (res.ok) return res.json();
+          throw new Error(`Status ${res.status}`);
+        })
+        .then(data => {
+          if (data.data) {
+            setMonthsStatus(data.data);
+          }
+        })
+        .catch(err => {
+          clearTimeout(timeoutId);
+          if (err instanceof Error && err.name !== "AbortError") {
+            console.warn("Failed to refresh status:", err);
+          }
+        });
     }, 1000);
   };
 
