@@ -105,7 +105,7 @@ export default function Items() {
     return () => {
       isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
-      controller.abort(new Error("Component unmounted"));
+      controller.abort();
     };
   }, []);
 
