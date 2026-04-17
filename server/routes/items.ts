@@ -14,21 +14,44 @@ async function getDropdownsCollection() {
   return db.collection("item_dropdowns");
 }
 
-// Get all items with ULTRA-FAST caching
+// Get all items with pagination and filtering support
 export const handleGetItems: RequestHandler = async (req, res) => {
   try {
-    // Check cache first - INSTANT response if cached
-    const cachedItems = cache.get(CACHE_KEYS.ITEMS_ALL);
-    if (cachedItems) {
-      console.log(`⚡ CACHE HIT: Returning ${cachedItems.length} items instantly`);
-      return res.json(cachedItems);
+    const page = Math.max(0, parseInt(req.query.page as string) || 0);
+    const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
+    const search = (req.query.search as string)?.toLowerCase() || "";
+    const group = req.query.group as string;
+    const category = req.query.category as string;
+
+    // Build cache key based on query params
+    const cacheKey = `items_page_${page}_${limit}_${search}_${group}_${category}`;
+    const cachedResult = cache.get(cacheKey);
+    if (cachedResult) {
+      console.log(`⚡ CACHE HIT: ${cacheKey}`);
+      return res.json(cachedResult);
     }
 
     console.log("🔄 CACHE MISS: Fetching from database...");
     const collection = await getItemsCollection();
-    
-    // Ultra-optimized query with minimal projection
-    const items = await collection.find({}, {
+
+    // Build query filter
+    const filter: any = {};
+    if (search) {
+      filter.$or = [
+        { itemName: { $regex: search, $options: "i" } },
+        { itemId: { $regex: search, $options: "i" } },
+        { group: { $regex: search, $options: "i" } },
+        { category: { $regex: search, $options: "i" } }
+      ];
+    }
+    if (group) filter.group = group;
+    if (category) filter.category = category;
+
+    // Count total for pagination info
+    const total = await collection.countDocuments(filter);
+
+    // Fetch paginated results
+    const items = await collection.find(filter, {
       projection: {
         itemId: 1,
         itemName: 1,
@@ -39,39 +62,30 @@ export const handleGetItems: RequestHandler = async (req, res) => {
         saleType: 1,
         itemType: 1,
         supplyNoteSku: 1,
-        variations: {
-          $slice: ["$variations", 10] // Limit variations for speed
-        },
+        variations: { $slice: ["$variations", 10] },
         updatedAt: 1
       }
     })
     .sort({ updatedAt: -1 })
-    .limit(2000) // Limit for ultra-fast response
+    .skip(page * limit)
+    .limit(limit)
     .toArray();
 
-    if (items.length === 0) {
-      console.warn("⚠️ No items found in database");
-      return res.json([]);
-    }
-
-    console.log(`✅ Retrieved ${items.length} items from database`);
-
-    // Process and cache for 5 minutes
-    const processedItems = items.map((item: any) => {
-      if (!item.itemId) {
-        console.warn(`⚠️ Item missing itemId: ${item.itemName}`);
+    const result = {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
       }
-      return item;
-    });
+    };
 
-    // Cache for ultra-fast future requests
-    cache.set(CACHE_KEYS.ITEMS_ALL, processedItems, 300); // 5 minutes
-    console.log("💾 Cached items for ultra-fast access");
+    // Cache for 5 minutes
+    cache.set(cacheKey, result, 300);
+    console.log(`✅ Retrieved ${items.length}/${total} items (page ${page})`);
 
-    const responseSize = JSON.stringify(processedItems).length;
-    console.log(`📤 Items response size: ${(responseSize / 1024).toFixed(2)} KB`);
-
-    res.json(processedItems);
+    res.json(result);
   } catch (error) {
     console.error("❌ Error fetching items:", error);
     res.status(500).json({

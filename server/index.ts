@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import compression from "compression";
 import { handleDemo } from "./routes/demo";
 import {
   handleUpload,
@@ -84,6 +85,14 @@ export function createServer() {
   });
 
   // Middleware
+  app.use(compression({
+    level: 9,
+    threshold: 1024, // Compress responses > 1KB
+    filter: (req, res) => {
+      if (req.headers['x-no-compression']) return false;
+      return compression.filter(req, res);
+    }
+  }));
   app.use(cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -93,9 +102,14 @@ export function createServer() {
   app.use(express.json({ limit: "200mb" }));
   app.use(express.urlencoded({ extended: true, limit: "200mb" }));
 
-  // Ensure responses have proper Content-Type
+  // Ensure responses have proper Content-Type and caching headers
   app.use((req, res, next) => {
     res.setHeader("Content-Type", "application/json");
+
+    // Cache API responses for 5 minutes
+    if (req.path.startsWith("/api/")) {
+      res.setHeader("Cache-Control", "public, max-age=300");
+    }
     next();
   });
 

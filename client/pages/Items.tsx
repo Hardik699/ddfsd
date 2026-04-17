@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Plus, Download, Search, FileUp, Trash2 } from "lucide-react";
 import ItemForm from "@/components/Items/ItemForm";
 import ItemsTable from "@/components/Items/ItemsTable";
@@ -10,44 +10,35 @@ export default function Items() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const searchTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // Filter items based on search term and remove empty items
+  // Debounce search term - only update after 300ms of no typing
+  useEffect(() => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, 300);
+
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [searchTerm]);
+
+  // API now handles filtering, so just use items directly
   const filteredItems = useMemo(() => {
-    // First filter out items with no meaningful data
-    const validItems = items.filter((item) => {
-      // Check if item has meaningful data
-      const hasItemName = item.itemName && item.itemName.trim() !== '' && item.itemName !== 'imported';
-      const hasValidGroup = item.group && item.group.trim() !== '' && item.group !== 'Other';
-      const hasValidCategory = item.category && item.category.trim() !== '' && item.category !== 'Other';
-      const hasVariations = item.variations && Array.isArray(item.variations) && item.variations.length > 0;
-      const hasDescription = item.description && item.description.trim() !== '';
-      const hasHsnCode = item.hsnCode && item.hsnCode.trim() !== '';
-      
-      // Item must have at least a proper name (not just "imported") AND either variations or other data
-      const hasProperName = hasItemName && item.itemName !== 'imported';
-      const hasOtherData = hasValidGroup || hasValidCategory || hasVariations || hasDescription || hasHsnCode;
-      
-      return hasProperName && hasOtherData;
+    return items.filter((item) => {
+      // Basic validation - server filters out empty items
+      const hasItemName = item.itemName && item.itemName.trim() !== '';
+      return hasItemName;
     });
-    
-    console.log(`📊 Filtered ${items.length} items to ${validItems.length} valid items`);
-    
-    // Then apply search filter
-    if (!searchTerm.trim()) return validItems;
-    const lowerSearch = searchTerm.toLowerCase();
-    return validItems.filter(
-      (item) =>
-        item.itemName?.toLowerCase().includes(lowerSearch) ||
-        item.itemId?.toLowerCase().includes(lowerSearch) ||
-        item.group?.toLowerCase().includes(lowerSearch) ||
-        item.category?.toLowerCase().includes(lowerSearch)
-    );
-  }, [items, searchTerm]);
+  }, [items]);
 
-  // Ultra-fast items fetching with aggressive caching
+  // Ultra-fast items fetching with pagination and search support
   useEffect(() => {
     let isMounted = true;
     const controller = new AbortController();
@@ -56,40 +47,39 @@ export default function Items() {
     const fetchItems = async () => {
       try {
         if (isMounted) setLoading(true);
-        console.log("⚡ ULTRA-FAST: Fetching items...");
 
-        // Timeout for large items payload (995 items = ~500KB)
         timeoutId = setTimeout(() => {
-          console.log("⏱️ Request timeout after 20 seconds");
-          controller.abort(new Error("Request timeout after 20 seconds"));
-        }, 20000);
+          controller.abort();
+        }, 10000);
 
-        const response = await fetch("/api/items", {
+        // Use pagination API
+        const params = new URLSearchParams({
+          page: '0',
+          limit: '50',
+          ...(debouncedSearch && { search: debouncedSearch })
+        });
+
+        const response = await fetch(`/api/items?${params}`, {
           signal: controller.signal,
           headers: {
-            'Cache-Control': 'max-age=300', // 5 minute browser cache
+            'Cache-Control': 'max-age=300',
           }
         });
 
         if (timeoutId) clearTimeout(timeoutId);
 
         if (!response.ok) {
-          throw new Error(`API returned ${response.status} ${response.statusText}`);
+          throw new Error(`API returned ${response.status}`);
         }
 
-        const data = await response.json();
-        console.log(`⚡ ULTRA-FAST: Loaded ${data.length} items in milliseconds`);
+        const { items: data = [] } = await response.json();
 
         if (isMounted) {
           setItems(Array.isArray(data) ? data : []);
         }
       } catch (error: any) {
-        if (error.name === "AbortError") {
-          console.warn("⚠️ Fetch was aborted:", error.message);
-        } else {
-          console.error("❌ Ultra-fast fetch failed:", error);
-        }
-        if (isMounted) {
+        if (error.name !== "AbortError" && isMounted) {
+          console.error("❌ Fetch failed:", error);
           setItems([]);
         }
       } finally {
@@ -101,13 +91,12 @@ export default function Items() {
 
     fetchItems();
 
-    // Cleanup function
     return () => {
       isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
       controller.abort();
     };
-  }, []);
+  }, [debouncedSearch]);
 
   const handleAddItem = (newItem: any) => {
     // Item is already saved in MongoDB via API

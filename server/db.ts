@@ -55,6 +55,21 @@ export async function getDatabase(): Promise<Db> {
       cachedClient = client;
       cachedDb = client.db("upload_system");
 
+      // Create database indexes for performance
+      try {
+        const itemsCollection = cachedDb.collection("items");
+        await Promise.all([
+          itemsCollection.createIndex({ itemName: "text", itemId: "text", group: "text", category: "text" }, { background: true }),
+          itemsCollection.createIndex({ group: 1 }, { background: true }),
+          itemsCollection.createIndex({ category: 1 }, { background: true }),
+          itemsCollection.createIndex({ updatedAt: -1 }, { background: true }),
+          itemsCollection.createIndex({ itemId: 1 }, { unique: true, background: true })
+        ]);
+        console.log("✅ Database indexes created");
+      } catch (err) {
+        console.warn("⚠️ Index creation warning:", err instanceof Error ? err.message : err);
+      }
+
       // Auto-reconnect on errors
       client.on("error", (err) => {
         console.error("❌ MongoDB error:", err.message);
