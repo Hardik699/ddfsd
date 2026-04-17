@@ -66,17 +66,29 @@ export default function DailySalesReport() {
 
   // â”€â”€â”€ Shared helper: fetch all sales data via ONE bulk API call â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const fetchBulkSalesData = async (itemsToProcess: any[]): Promise<any[]> => {
-    const itemIds = itemsToProcess.map((i: any) => i.itemId);
-    const response = await fetch("/api/sales/bulk", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ itemIds, startDate: dateRange.start, endDate: dateRange.end }),
-    });
-    if (!response.ok) throw new Error("Failed to fetch bulk sales data");
-    const data = await response.json();
-    if (!data.success) throw new Error(data.error || "Bulk API error");
-    console.log(`âœ… Bulk API: ${data.count} records for ${itemsToProcess.length} items`);
-    return data.data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort(new Error("Bulk sales fetch timeout after 60 seconds"));
+    }, 60000); // 60 second timeout for large datasets
+
+    try {
+      const itemIds = itemsToProcess.map((i: any) => i.itemId);
+      const response = await fetch("/api/sales/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemIds, startDate: dateRange.start, endDate: dateRange.end }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) throw new Error("Failed to fetch bulk sales data");
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || "Bulk API error");
+      console.log(`✅ Bulk API: ${data.count} records for ${itemsToProcess.length} items`);
+      return data.data;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
   };
 
   // â”€â”€â”€ Shared helper: fetch supply note qty by item + date â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -88,12 +100,19 @@ export default function DailySalesReport() {
 
     if (itemsWithSku.length === 0) return new Map();
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort(new Error("Supply note fetch timeout after 60 seconds"));
+    }, 60000);
+
     try {
       const response = await fetch("/api/supply-note/qty-by-items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: itemsWithSku, startDate: dateRange.start, endDate: dateRange.end }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       if (!response.ok) return new Map();
       const data = await response.json();
       if (!data.success) return new Map();
@@ -103,9 +122,11 @@ export default function DailySalesReport() {
       for (const rec of data.data) {
         map.set(`${rec.itemId}_${rec.date}`, rec.supplyNoteQty);
       }
-      console.log(`âœ… Supply note qty: ${map.size} date-item records`);
+      console.log(`✅ Supply note qty: ${map.size} date-item records`);
       return map;
-    } catch {
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      console.warn("Supply note fetch failed:", error.message);
       return new Map();
     }
   };
