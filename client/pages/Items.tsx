@@ -49,18 +49,20 @@ export default function Items() {
 
   // Ultra-fast items fetching with aggressive caching
   useEffect(() => {
-    const fetchItems = async () => {
-      const controller = new AbortController();
+    let isMounted = true;
+    const controller = new AbortController();
+    let timeoutId: NodeJS.Timeout | null = null;
 
+    const fetchItems = async () => {
       try {
-        setLoading(true);
+        if (isMounted) setLoading(true);
         console.log("⚡ ULTRA-FAST: Fetching items...");
 
-        // Ultra-fast timeout for immediate feedback
-        const timeoutId = setTimeout(() => {
-          console.log("⏱️ Ultra-fast timeout after 5 seconds");
-          controller.abort();
-        }, 5000);
+        // Timeout for large items payload (995 items = ~500KB)
+        timeoutId = setTimeout(() => {
+          console.log("⏱️ Request timeout after 20 seconds");
+          controller.abort(new Error("Request timeout after 20 seconds"));
+        }, 20000);
 
         const response = await fetch("/api/items", {
           signal: controller.signal,
@@ -68,24 +70,43 @@ export default function Items() {
             'Cache-Control': 'max-age=300', // 5 minute browser cache
           }
         });
-        clearTimeout(timeoutId);
+
+        if (timeoutId) clearTimeout(timeoutId);
 
         if (!response.ok) {
           throw new Error(`API returned ${response.status} ${response.statusText}`);
         }
-        
+
         const data = await response.json();
         console.log(`⚡ ULTRA-FAST: Loaded ${data.length} items in milliseconds`);
-        setItems(Array.isArray(data) ? data : []);
+
+        if (isMounted) {
+          setItems(Array.isArray(data) ? data : []);
+        }
       } catch (error: any) {
-        console.error("❌ Ultra-fast fetch failed:", error);
-        setItems([]);
+        if (error.name === "AbortError") {
+          console.warn("⚠️ Fetch was aborted:", error.message);
+        } else {
+          console.error("❌ Ultra-fast fetch failed:", error);
+        }
+        if (isMounted) {
+          setItems([]);
+        }
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
 
     fetchItems();
+
+    // Cleanup function
+    return () => {
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
+      controller.abort(new Error("Component unmounted"));
+    };
   }, []);
 
   const handleAddItem = (newItem: any) => {

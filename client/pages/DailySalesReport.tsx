@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { ArrowLeft, Download, TrendingUp } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -66,17 +66,25 @@ export default function DailySalesReport() {
 
   // â”€â”€â”€ Shared helper: fetch all sales data via ONE bulk API call â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const fetchBulkSalesData = async (itemsToProcess: any[]): Promise<any[]> => {
-    const itemIds = itemsToProcess.map((i: any) => i.itemId);
-    const response = await fetch("/api/sales/bulk", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ itemIds, startDate: dateRange.start, endDate: dateRange.end }),
-    });
-    if (!response.ok) throw new Error("Failed to fetch bulk sales data");
-    const data = await response.json();
-    if (!data.success) throw new Error(data.error || "Bulk API error");
-    console.log(`âœ… Bulk API: ${data.count} records for ${itemsToProcess.length} items`);
-    return data.data;
+    try {
+      const itemIds = itemsToProcess.map((i: any) => i.itemId);
+      console.log(`⏳ Fetching bulk sales for ${itemsToProcess.length} items (${dateRange.start} to ${dateRange.end})...`);
+
+      const response = await fetch("/api/sales/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemIds, startDate: dateRange.start, endDate: dateRange.end }),
+      });
+
+      if (!response.ok) throw new Error(`API returned ${response.status}: ${response.statusText}`);
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || "Bulk API error");
+      console.log(`✅ Bulk API: ${data.count} records for ${itemsToProcess.length} items`);
+      return data.data;
+    } catch (error: any) {
+      console.error("❌ Bulk sales fetch error:", error.message);
+      throw error;
+    }
   };
 
   // â”€â”€â”€ Shared helper: fetch supply note qty by item + date â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -89,23 +97,33 @@ export default function DailySalesReport() {
     if (itemsWithSku.length === 0) return new Map();
 
     try {
+      console.log(`⏳ Fetching supply note qty for ${itemsWithSku.length} items...`);
+
       const response = await fetch("/api/supply-note/qty-by-items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: itemsWithSku, startDate: dateRange.start, endDate: dateRange.end }),
       });
-      if (!response.ok) return new Map();
+
+      if (!response.ok) {
+        console.warn(`Supply note API returned ${response.status}, continuing without supply notes`);
+        return new Map();
+      }
       const data = await response.json();
-      if (!data.success) return new Map();
+      if (!data.success) {
+        console.warn("Supply note API error, continuing without supply notes");
+        return new Map();
+      }
 
       // Map: "itemId_date" â†’ supplyNoteQty
       const map = new Map<string, number>();
       for (const rec of data.data) {
         map.set(`${rec.itemId}_${rec.date}`, rec.supplyNoteQty);
       }
-      console.log(`âœ… Supply note qty: ${map.size} date-item records`);
+      console.log(`✅ Supply note qty: ${map.size} date-item records`);
       return map;
-    } catch {
+    } catch (error: any) {
+      console.warn("⚠️ Supply note fetch failed, continuing without supply notes:", error.message);
       return new Map();
     }
   };
@@ -211,7 +229,7 @@ export default function DailySalesReport() {
         weeklyRanges.forEach((week) => {
           let weekOnline = 0, weekOffline = 0, weekSupply = 0;
           Object.entries(item.dates).forEach(([dateStr, data]: [string, any]) => {
-            const date = new Date(dateStr);
+            const date = new Date(dateStr + "T00:00:00Z"); // Use UTC to avoid timezone shifts
             if (date >= week.start && date <= week.end) {
               weekOnline  += data.online;
               weekOffline += data.offline;
@@ -274,14 +292,25 @@ export default function DailySalesReport() {
       XLSX.writeFile(wb, `Weekly_Sales_Report_${categoryLabel}_${dateRange.start}_to_${dateRange.end}.xlsx`, { bookType: "xlsx", cellStyles: true });
 
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Weekly download failed:", error);
-      alert("Failed to download weekly report. Please try again.");
+      const errorMsg = error.message || "Unknown error";
+      alert(`Failed to download weekly report:\n${errorMsg}\n\nPlease check the browser console for details.`);
       setLoading(false);
     }
   };
 
 
+
+  // Helper: convert YYYY-MM-DD to month key without timezone issues
+  const getMonthKeyFromDateString = (dateStr: string): string => {
+    // dateStr format: "YYYY-MM-DD"
+    const [year, month] = dateStr.split("-");
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthIndex = parseInt(month) - 1;
+    const shortYear = year.substring(2);
+    return `${monthNames[monthIndex]}-${shortYear}`;
+  };
 
   const downloadMonthlySalesReport = async () => {
     try {
@@ -309,9 +338,8 @@ export default function DailySalesReport() {
         if (!itemMap[itemKey]) {
           itemMap[itemKey] = { itemName: sale.itemName, category: sale.category, group: sale.group || "N/A", itemId: sale.itemId, months: {} };
         }
-        const date = new Date(sale.date);
-        const monthKey = date.toLocaleDateString("en-US", { month: "short", year: "2-digit" }).replace(" ", "-");
-        if (!itemMap[itemKey].months[monthKey]) itemMap[itemKey].months[monthKey] = { online: 0, offline: 0, supply: 0, supplyDates: new Set<string>() };
+        const monthKey = getMonthKeyFromDateString(sale.date);
+        if (!itemMap[itemKey].months[monthKey]) itemMap[itemKey].months[monthKey] = { online: 0, offline: 0, supply: 0 };
         itemMap[itemKey].months[monthKey].online  += (sale.zomatoQty || 0) + (sale.swiggyQty || 0);
         itemMap[itemKey].months[monthKey].offline += (sale.diningQty  || 0) + (sale.parcelQty || 0);
       });
@@ -322,13 +350,12 @@ export default function DailySalesReport() {
         const lastUnderscore = key.lastIndexOf("_");
         const itemId = key.substring(0, lastUnderscore);
         const dateStr = key.substring(lastUnderscore + 1);
-        const date = new Date(dateStr);
-        const monthKey = date.toLocaleDateString("en-US", { month: "short", year: "2-digit" }).replace(" ", "-");
+        const monthKey = getMonthKeyFromDateString(dateStr);
 
         // Find the item in itemMap by itemId
         const itemEntry = Object.values(itemMap).find((item: any) => item.itemId === itemId) as any;
         if (!itemEntry) return;
-        if (!itemEntry.months[monthKey]) itemEntry.months[monthKey] = { online: 0, offline: 0, supply: 0, supplyDates: new Set<string>() };
+        if (!itemEntry.months[monthKey]) itemEntry.months[monthKey] = { online: 0, offline: 0, supply: 0 };
         itemEntry.months[monthKey].supply += qty;
       });
 
@@ -418,9 +445,10 @@ export default function DailySalesReport() {
       XLSX.writeFile(wb, `Monthly_Sales_Report_${categoryLabel}_${dateRange.start}_to_${dateRange.end}.xlsx`, { bookType: "xlsx", cellStyles: true });
 
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Monthly download failed:", error);
-      alert("Failed to download monthly report. Please try again.");
+      const errorMsg = error.message || "Unknown error";
+      alert(`Failed to download monthly report:\n${errorMsg}\n\nPlease check the browser console for details.`);
       setLoading(false);
     }
   };
@@ -524,9 +552,10 @@ export default function DailySalesReport() {
       XLSX.writeFile(wb, `Daily_Sales_Report_${categoryLabel}_${dateRange.start}_to_${dateRange.end}.xlsx`, { bookType: "xlsx", cellStyles: true });
 
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Download failed:", error);
-      alert("Failed to download report. Please try again.");
+      const errorMsg = error.message || "Unknown error";
+      alert(`Failed to download report:\n${errorMsg}\n\nPlease check the browser console for details.`);
       setLoading(false);
     }
   };
