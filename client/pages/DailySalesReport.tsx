@@ -66,27 +66,23 @@ export default function DailySalesReport() {
 
   // â”€â”€â”€ Shared helper: fetch all sales data via ONE bulk API call â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const fetchBulkSalesData = async (itemsToProcess: any[]): Promise<any[]> => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort(new Error("Bulk sales fetch timeout after 180 seconds"));
-    }, 180000); // 180 second timeout for very large datasets (19k+ rows)
-
     try {
       const itemIds = itemsToProcess.map((i: any) => i.itemId);
+      console.log(`⏳ Fetching bulk sales for ${itemsToProcess.length} items (${dateRange.start} to ${dateRange.end})...`);
+
       const response = await fetch("/api/sales/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ itemIds, startDate: dateRange.start, endDate: dateRange.end }),
-        signal: controller.signal,
       });
-      clearTimeout(timeoutId);
-      if (!response.ok) throw new Error("Failed to fetch bulk sales data");
+
+      if (!response.ok) throw new Error(`API returned ${response.status}: ${response.statusText}`);
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Bulk API error");
       console.log(`✅ Bulk API: ${data.count} records for ${itemsToProcess.length} items`);
       return data.data;
     } catch (error: any) {
-      clearTimeout(timeoutId);
+      console.error("❌ Bulk sales fetch error:", error.message);
       throw error;
     }
   };
@@ -100,22 +96,24 @@ export default function DailySalesReport() {
 
     if (itemsWithSku.length === 0) return new Map();
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort(new Error("Supply note fetch timeout after 120 seconds"));
-    }, 120000); // 120 second timeout for supply note processing
-
     try {
+      console.log(`⏳ Fetching supply note qty for ${itemsWithSku.length} items...`);
+
       const response = await fetch("/api/supply-note/qty-by-items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: itemsWithSku, startDate: dateRange.start, endDate: dateRange.end }),
-        signal: controller.signal,
       });
-      clearTimeout(timeoutId);
-      if (!response.ok) return new Map();
+
+      if (!response.ok) {
+        console.warn(`Supply note API returned ${response.status}, continuing without supply notes`);
+        return new Map();
+      }
       const data = await response.json();
-      if (!data.success) return new Map();
+      if (!data.success) {
+        console.warn("Supply note API error, continuing without supply notes");
+        return new Map();
+      }
 
       // Map: "itemId_date" â†’ supplyNoteQty
       const map = new Map<string, number>();
@@ -125,8 +123,7 @@ export default function DailySalesReport() {
       console.log(`✅ Supply note qty: ${map.size} date-item records`);
       return map;
     } catch (error: any) {
-      clearTimeout(timeoutId);
-      console.warn("Supply note fetch failed:", error.message);
+      console.warn("⚠️ Supply note fetch failed, continuing without supply notes:", error.message);
       return new Map();
     }
   };
@@ -298,11 +295,7 @@ export default function DailySalesReport() {
     } catch (error: any) {
       console.error("Weekly download failed:", error);
       const errorMsg = error.message || "Unknown error";
-      if (errorMsg.includes("timeout")) {
-        alert("Download is taking too long. Please try again with a shorter date range or fewer items.");
-      } else {
-        alert(`Failed to download weekly report: ${errorMsg}`);
-      }
+      alert(`Failed to download weekly report:\n${errorMsg}\n\nPlease check the browser console for details.`);
       setLoading(false);
     }
   };
@@ -455,11 +448,7 @@ export default function DailySalesReport() {
     } catch (error: any) {
       console.error("Monthly download failed:", error);
       const errorMsg = error.message || "Unknown error";
-      if (errorMsg.includes("timeout")) {
-        alert("Download is taking too long. Please try again with a shorter date range or fewer items.");
-      } else {
-        alert(`Failed to download monthly report: ${errorMsg}`);
-      }
+      alert(`Failed to download monthly report:\n${errorMsg}\n\nPlease check the browser console for details.`);
       setLoading(false);
     }
   };
@@ -566,11 +555,7 @@ export default function DailySalesReport() {
     } catch (error: any) {
       console.error("Download failed:", error);
       const errorMsg = error.message || "Unknown error";
-      if (errorMsg.includes("timeout")) {
-        alert("Download is taking too long. Please try again with a shorter date range or fewer items.");
-      } else {
-        alert(`Failed to download report: ${errorMsg}`);
-      }
+      alert(`Failed to download report:\n${errorMsg}\n\nPlease check the browser console for details.`);
       setLoading(false);
     }
   };
