@@ -68,8 +68,8 @@ export default function DailySalesReport() {
   const fetchBulkSalesData = async (itemsToProcess: any[]): Promise<any[]> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-      controller.abort(new Error("Bulk sales fetch timeout after 60 seconds"));
-    }, 60000); // 60 second timeout for large datasets
+      controller.abort(new Error("Bulk sales fetch timeout after 180 seconds"));
+    }, 180000); // 180 second timeout for very large datasets (19k+ rows)
 
     try {
       const itemIds = itemsToProcess.map((i: any) => i.itemId);
@@ -102,8 +102,8 @@ export default function DailySalesReport() {
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-      controller.abort(new Error("Supply note fetch timeout after 60 seconds"));
-    }, 60000);
+      controller.abort(new Error("Supply note fetch timeout after 120 seconds"));
+    }, 120000); // 120 second timeout for supply note processing
 
     try {
       const response = await fetch("/api/supply-note/qty-by-items", {
@@ -295,9 +295,14 @@ export default function DailySalesReport() {
       XLSX.writeFile(wb, `Weekly_Sales_Report_${categoryLabel}_${dateRange.start}_to_${dateRange.end}.xlsx`, { bookType: "xlsx", cellStyles: true });
 
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Weekly download failed:", error);
-      alert("Failed to download weekly report. Please try again.");
+      const errorMsg = error.message || "Unknown error";
+      if (errorMsg.includes("timeout")) {
+        alert("Download is taking too long. Please try again with a shorter date range or fewer items.");
+      } else {
+        alert(`Failed to download weekly report: ${errorMsg}`);
+      }
       setLoading(false);
     }
   };
@@ -447,9 +452,14 @@ export default function DailySalesReport() {
       XLSX.writeFile(wb, `Monthly_Sales_Report_${categoryLabel}_${dateRange.start}_to_${dateRange.end}.xlsx`, { bookType: "xlsx", cellStyles: true });
 
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Monthly download failed:", error);
-      alert("Failed to download monthly report. Please try again.");
+      const errorMsg = error.message || "Unknown error";
+      if (errorMsg.includes("timeout")) {
+        alert("Download is taking too long. Please try again with a shorter date range or fewer items.");
+      } else {
+        alert(`Failed to download monthly report: ${errorMsg}`);
+      }
       setLoading(false);
     }
   };
@@ -553,9 +563,14 @@ export default function DailySalesReport() {
       XLSX.writeFile(wb, `Daily_Sales_Report_${categoryLabel}_${dateRange.start}_to_${dateRange.end}.xlsx`, { bookType: "xlsx", cellStyles: true });
 
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Download failed:", error);
-      alert("Failed to download report. Please try again.");
+      const errorMsg = error.message || "Unknown error";
+      if (errorMsg.includes("timeout")) {
+        alert("Download is taking too long. Please try again with a shorter date range or fewer items.");
+      } else {
+        alert(`Failed to download report: ${errorMsg}`);
+      }
       setLoading(false);
     }
   };
