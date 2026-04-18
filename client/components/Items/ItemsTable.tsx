@@ -1,8 +1,90 @@
-import React, { useState } from "react";
+import React, { useState, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 
 const r5 = (p: number) => Math.round(p / 5) * 5;
+
+// Memoized row component to prevent unnecessary re-renders
+const TableRow = memo(({ item, isSel, bg, variations, CHANNELS, selected, onToggleRow, onDelete, navigate, getPrice }: any) => (
+  <tr
+    key={item.itemId}
+    onClick={() => navigate(`/items/${item.itemId}`)}
+    className="border-b border-slate-700/30 cursor-pointer text-xs group hover:brightness-110"
+    style={{ background: bg }}
+  >
+    <td
+      style={{ position: "sticky", left: 0, zIndex: 10, background: bg, minWidth: 44, width: 44 }}
+      className="px-3 py-3 text-center border-r border-slate-700/40"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <input
+        type="checkbox"
+        checked={isSel}
+        onChange={() => onToggleRow(item.itemId)}
+        className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+      />
+    </td>
+    <td
+      style={{ position: "sticky", left: 44, zIndex: 10, background: bg, minWidth: 180 }}
+      className="px-3 py-3 text-white font-semibold border-r border-slate-700/40"
+    >
+      <span className="truncate block max-w-[160px]">{item.itemName}</span>
+    </td>
+    <td
+      style={{ position: "sticky", left: 224, zIndex: 10, background: bg, minWidth: 100 }}
+      className="px-3 py-3 text-gray-300 text-center border-r border-slate-700/40"
+    >
+      {item.group}
+    </td>
+    <td
+      style={{ position: "sticky", left: 324, zIndex: 10, background: bg, minWidth: 110 }}
+      className="px-3 py-3 text-gray-300 text-center border-r border-slate-700/40"
+    >
+      {item.category}
+    </td>
+    <td
+      style={{ position: "sticky", left: 434, zIndex: 10, background: bg, minWidth: 110 }}
+      className="px-3 py-3 text-center border-r border-slate-700/40"
+    >
+      {item.supplyNoteSku ? (
+        <span className="text-purple-300 font-mono text-[11px] bg-purple-900/30 px-2 py-0.5 rounded border border-purple-700/40">
+          {item.supplyNoteSku}
+        </span>
+      ) : (
+        <span className="text-slate-600 text-[11px]">—</span>
+      )}
+    </td>
+    <td
+      style={{ position: "sticky", left: 544, zIndex: 10, background: bg, minWidth: 52, boxShadow: "4px 0 16px rgba(0,0,0,0.6)" }}
+      className="px-2 py-3 text-center border-r border-slate-700/40"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        onClick={() => onDelete?.(item.itemId)}
+        className="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded transition-all opacity-0 group-hover:opacity-100"
+      >
+        <Trash2 className="w-4 h-4" />
+      </button>
+    </td>
+    {variations.map((v: any) => (
+      <React.Fragment key={`${item.itemId}-${v}`}>
+        {CHANNELS.map((ch: string) => (
+          <td key={ch} className="px-2 py-3 text-center font-bold text-gray-100 border border-slate-600/30 bg-slate-800/40 text-xs">
+            {getPrice(item, v, ch)}
+          </td>
+        ))}
+      </React.Fragment>
+    ))}
+  </tr>
+), (prevProps, nextProps) => {
+  // Custom comparison for memo - only re-render if these specific props change
+  return (
+    prevProps.isSel === nextProps.isSel &&
+    prevProps.bg === nextProps.bg &&
+    prevProps.item.itemId === nextProps.item.itemId &&
+    prevProps.variations.length === nextProps.variations.length
+  );
+});
 
 const autoPrice = (base: number, ch: string): number => {
   if (base <= 0) return 0;
@@ -42,7 +124,7 @@ interface ItemsTableProps {
   onSelectedChange?: (selectedIds: Set<string>) => void;
 }
 
-export default function ItemsTable({ items, onDelete, onSelectedChange }: ItemsTableProps) {
+function ItemsTableComponent({ items, onDelete, onSelectedChange }: ItemsTableProps) {
   const navigate = useNavigate();
   const [perPage, setPerPage] = useState(15);
   const [page, setPage] = useState(0);
@@ -183,76 +265,19 @@ export default function ItemsTable({ items, onDelete, onSelectedChange }: ItemsT
               const isSel = selected.has(item.itemId);
               const bg = isSel ? "#1e3a5f" : "#0f172a";
               return (
-                <tr
+                <TableRow
                   key={item.itemId}
-                  onClick={() => navigate(`/items/${item.itemId}`)}
-                  className="border-b border-slate-700/30 cursor-pointer text-xs group hover:brightness-110"
-                  style={{ background: bg }}
-                >
-                  <td
-                    style={{ position: "sticky", left: 0, zIndex: 10, background: bg, minWidth: 44, width: 44 }}
-                    className="px-3 py-3 text-center border-r border-slate-700/40"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isSel}
-                      onChange={() => toggleRow(item.itemId)}
-                      className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
-                    />
-                  </td>
-                  <td
-                    style={{ position: "sticky", left: 44, zIndex: 10, background: bg, minWidth: 180 }}
-                    className="px-3 py-3 text-white font-semibold border-r border-slate-700/40"
-                  >
-                    <span className="truncate block max-w-[160px]">{item.itemName}</span>
-                  </td>
-                  <td
-                    style={{ position: "sticky", left: 224, zIndex: 10, background: bg, minWidth: 100 }}
-                    className="px-3 py-3 text-gray-300 text-center border-r border-slate-700/40"
-                  >
-                    {item.group}
-                  </td>
-                  <td
-                    style={{ position: "sticky", left: 324, zIndex: 10, background: bg, minWidth: 110 }}
-                    className="px-3 py-3 text-gray-300 text-center border-r border-slate-700/40"
-                  >
-                    {item.category}
-                  </td>
-                  <td
-                    style={{ position: "sticky", left: 434, zIndex: 10, background: bg, minWidth: 110 }}
-                    className="px-3 py-3 text-center border-r border-slate-700/40"
-                  >
-                    {item.supplyNoteSku ? (
-                      <span className="text-purple-300 font-mono text-[11px] bg-purple-900/30 px-2 py-0.5 rounded border border-purple-700/40">
-                        {item.supplyNoteSku}
-                      </span>
-                    ) : (
-                      <span className="text-slate-600 text-[11px]">—</span>
-                    )}
-                  </td>
-                  <td
-                    style={{ position: "sticky", left: 544, zIndex: 10, background: bg, minWidth: 52, boxShadow: "4px 0 16px rgba(0,0,0,0.6)" }}
-                    className="px-2 py-3 text-center border-r border-slate-700/40"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      onClick={() => onDelete?.(item.itemId)}
-                      className="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded transition-all opacity-0 group-hover:opacity-100"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                  {variations.map((v) => (
-                    <React.Fragment key={`${item.itemId}-${v}`}>
-                      {CHANNELS.map((ch) => (
-                        <td key={ch} className="px-2 py-3 text-center font-bold text-gray-100 border border-slate-600/30 bg-slate-800/40 text-xs">
-                          {getPrice(item, v, ch)}
-                        </td>
-                      ))}
-                    </React.Fragment>
-                  ))}
-                </tr>
+                  item={item}
+                  isSel={isSel}
+                  bg={bg}
+                  variations={variations}
+                  CHANNELS={CHANNELS}
+                  selected={selected}
+                  onToggleRow={toggleRow}
+                  onDelete={onDelete}
+                  navigate={navigate}
+                  getPrice={getPrice}
+                />
               );
             })}
           </tbody>
@@ -351,3 +376,7 @@ export default function ItemsTable({ items, onDelete, onSelectedChange }: ItemsT
     </div>
   );
 }
+
+// Export memoized component to prevent unnecessary re-renders
+const ItemsTable = memo(ItemsTableComponent);
+export default ItemsTable;

@@ -49,21 +49,50 @@ export default function SupplyNoteUploadTab() {
   // Fetch month status whenever year changes
   useEffect(() => {
     let mounted = true;
-    fetch(`/api/supply-note/status?year=${selectedYear}`)
-      .then((r) => r.json())
-      .then((d) => { if (mounted && d.data) setMonthsStatus(d.data); })
-      .catch(() => {
-        if (mounted)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    fetch(`/api/supply-note/status?year=${selectedYear}`, { signal: controller.signal })
+      .then((r) => {
+        clearTimeout(timeoutId);
+        if (!r.ok) throw new Error(`Status ${r.status}`);
+        return r.json();
+      })
+      .then((d) => {
+        if (mounted && d.data) setMonthsStatus(d.data);
+      })
+      .catch((err) => {
+        clearTimeout(timeoutId);
+        if (mounted && !(err instanceof Error && err.name === "AbortError")) {
+          console.warn("Failed to fetch supply note status:", err);
           setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({ month: i + 1, status: "pending" as const })));
+        }
       });
-    return () => { mounted = false; };
+
+    return () => {
+      mounted = false;
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [selectedYear]);
 
   const refreshStatus = () => {
-    fetch(`/api/supply-note/status?year=${selectedYear}`)
-      .then((r) => r.json())
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    fetch(`/api/supply-note/status?year=${selectedYear}`, { signal: controller.signal })
+      .then((r) => {
+        clearTimeout(timeoutId);
+        if (!r.ok) throw new Error(`Status ${r.status}`);
+        return r.json();
+      })
       .then((d) => { if (d.data) setMonthsStatus(d.data); })
-      .catch(() => {});
+      .catch((err) => {
+        clearTimeout(timeoutId);
+        if (!(err instanceof Error && err.name === "AbortError")) {
+          console.warn("Failed to refresh supply note status:", err);
+        }
+      });
   };
 
   const getMonthStatus = (m: number) =>

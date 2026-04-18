@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Plus, Download, Search, FileUp, Trash2 } from "lucide-react";
 import ItemForm from "@/components/Items/ItemForm";
 import ItemsTable from "@/components/Items/ItemsTable";
@@ -10,44 +10,35 @@ export default function Items() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const searchTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // Filter items based on search term and remove empty items
+  // Debounce search term - only update after 300ms of no typing
+  useEffect(() => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, 300);
+
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [searchTerm]);
+
+  // API now handles filtering, so just use items directly
   const filteredItems = useMemo(() => {
-    // First filter out items with no meaningful data
-    const validItems = items.filter((item) => {
-      // Check if item has meaningful data
-      const hasItemName = item.itemName && item.itemName.trim() !== '' && item.itemName !== 'imported';
-      const hasValidGroup = item.group && item.group.trim() !== '' && item.group !== 'Other';
-      const hasValidCategory = item.category && item.category.trim() !== '' && item.category !== 'Other';
-      const hasVariations = item.variations && Array.isArray(item.variations) && item.variations.length > 0;
-      const hasDescription = item.description && item.description.trim() !== '';
-      const hasHsnCode = item.hsnCode && item.hsnCode.trim() !== '';
-      
-      // Item must have at least a proper name (not just "imported") AND either variations or other data
-      const hasProperName = hasItemName && item.itemName !== 'imported';
-      const hasOtherData = hasValidGroup || hasValidCategory || hasVariations || hasDescription || hasHsnCode;
-      
-      return hasProperName && hasOtherData;
+    return items.filter((item) => {
+      // Basic validation - server filters out empty items
+      const hasItemName = item.itemName && item.itemName.trim() !== '';
+      return hasItemName;
     });
-    
-    console.log(`📊 Filtered ${items.length} items to ${validItems.length} valid items`);
-    
-    // Then apply search filter
-    if (!searchTerm.trim()) return validItems;
-    const lowerSearch = searchTerm.toLowerCase();
-    return validItems.filter(
-      (item) =>
-        item.itemName?.toLowerCase().includes(lowerSearch) ||
-        item.itemId?.toLowerCase().includes(lowerSearch) ||
-        item.group?.toLowerCase().includes(lowerSearch) ||
-        item.category?.toLowerCase().includes(lowerSearch)
-    );
-  }, [items, searchTerm]);
+  }, [items]);
 
-  // Ultra-fast items fetching with aggressive caching
+  // Ultra-fast items fetching with pagination and search support
   useEffect(() => {
     let isMounted = true;
     const controller = new AbortController();
@@ -56,40 +47,39 @@ export default function Items() {
     const fetchItems = async () => {
       try {
         if (isMounted) setLoading(true);
-        console.log("⚡ ULTRA-FAST: Fetching items...");
 
-        // Timeout for large items payload (995 items = ~500KB)
         timeoutId = setTimeout(() => {
-          console.log("⏱️ Request timeout after 20 seconds");
-          controller.abort(new Error("Request timeout after 20 seconds"));
-        }, 20000);
+          controller.abort();
+        }, 10000);
 
-        const response = await fetch("/api/items", {
+        // Use pagination API
+        const params = new URLSearchParams({
+          page: '0',
+          limit: '50',
+          ...(debouncedSearch && { search: debouncedSearch })
+        });
+
+        const response = await fetch(`/api/items?${params}`, {
           signal: controller.signal,
           headers: {
-            'Cache-Control': 'max-age=300', // 5 minute browser cache
+            'Cache-Control': 'max-age=300',
           }
         });
 
         if (timeoutId) clearTimeout(timeoutId);
 
         if (!response.ok) {
-          throw new Error(`API returned ${response.status} ${response.statusText}`);
+          throw new Error(`API returned ${response.status}`);
         }
 
-        const data = await response.json();
-        console.log(`⚡ ULTRA-FAST: Loaded ${data.length} items in milliseconds`);
+        const { items: data = [] } = await response.json();
 
         if (isMounted) {
           setItems(Array.isArray(data) ? data : []);
         }
       } catch (error: any) {
-        if (error.name === "AbortError") {
-          console.warn("⚠️ Fetch was aborted:", error.message);
-        } else {
-          console.error("❌ Ultra-fast fetch failed:", error);
-        }
-        if (isMounted) {
+        if (error.name !== "AbortError" && isMounted) {
+          console.error("❌ Fetch failed:", error);
           setItems([]);
         }
       } finally {
@@ -101,13 +91,12 @@ export default function Items() {
 
     fetchItems();
 
-    // Cleanup function
     return () => {
       isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
-      controller.abort(new Error("Component unmounted"));
+      controller.abort();
     };
-  }, []);
+  }, [debouncedSearch]);
 
   const handleAddItem = (newItem: any) => {
     // Item is already saved in MongoDB via API
@@ -246,194 +235,183 @@ export default function Items() {
   };
 
   const handleDownloadItemList = async () => {
-      try {
-        const XLSX = await import("xlsx");
+    if (items.length === 0) {
+      alert("No items to download");
+      return;
+    }
 
-        const isSizeVar = (val: string) =>
-          /\d/.test(val) || /^(piece|half|full|small|medium|large|regular)$/i.test(val.trim());
-
-        const varPriority = (s: string) => {
-          const sl = s.toLowerCase().replace(/\s+/g, " ").trim();
-          if (sl === "1 kg" || sl === "1kg") return 0;
-          if (sl === "500 gms" || sl === "500gms" || sl === "500 gm" || sl === "500gm") return 1;
-          if (sl === "250 gms" || sl === "250gms" || sl === "250 gm" || sl === "250gm") return 2;
-          if (sl === "1000 gms" || sl === "1000gms" || sl === "1000 gm" || sl === "1000gm") return 3;
-          if (sl === "1 pc" || sl === "1pc" || sl === "1 piece") return 4;
-          if (/\d/.test(sl) && (sl.includes("gm") || sl.includes("kg"))) return 5;
-          return 6;
-        };
-
-        const allVariations = Array.from(
-          new Set(items.flatMap((item) => (item.variations || []).map((v: any) => String(v.value))))
-        )
-          .filter(isSizeVar)
-          .sort((a, b) => {
-            const pa = varPriority(a), pb = varPriority(b);
-            if (pa !== pb) return pa - pb;
-            const n = (s: string) => {
-              const num = parseFloat(s.match(/[\d.]+/)?.[0] || "0");
-              return s.toLowerCase().includes("kg") ? num * 1000 : num;
-            };
-            return n(a) - n(b);
-          });
-
-        const CHANNELS = ["Dining", "Parcal", "Swiggy", "Zomato"];
-
-        const getPrice = (item: any, varValue: string, channel: string): number | string => {
-          const v = (item.variations || []).find((x: any) => x.value === varValue);
-          if (!v) return "";
-          const stored = v.channels?.[channel];
-          let price = stored && stored > 0 ? stored : 0;
-          if (!price) {
-            if (channel === "Zomato" || channel === "Swiggy") price = Math.round((v.price * 1.15) / 5) * 5;
-            else price = v.price || 0;
-          }
-          return price > 0 ? price : "";
-        };
-
-        // Build styled HTML table → convert to xlsx (preserves colors/borders)
-        const bs = "border:1px solid #374151;";
-        let html = `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;">`;
-
-        // Row 1: Item Name, Group, Category (rowspan=2) + variation headers
-        html += `<tr>`;
-        html += `<th rowspan="2" style="${bs}background:#1e293b;color:#f1f5f9;font-weight:bold;padding:8px 10px;text-align:left;min-width:200px;">Item Name</th>`;
-        html += `<th rowspan="2" style="${bs}background:#1e293b;color:#f1f5f9;font-weight:bold;padding:8px 10px;text-align:center;">Group</th>`;
-        html += `<th rowspan="2" style="${bs}background:#1e293b;color:#f1f5f9;font-weight:bold;padding:8px 10px;text-align:center;">Category</th>`;
-        allVariations.forEach((v) => {
-          html += `<th colspan="4" style="${bs}background:#1e3a5f;color:#93c5fd;font-weight:bold;padding:8px 10px;text-align:center;">${v}</th>`;
-        });
-        html += `</tr>`;
-
-        // Row 2: channel sub-headers
-        html += `<tr>`;
-        allVariations.forEach(() => {
-          CHANNELS.forEach((ch) => {
-            html += `<th style="${bs}background:#0f172a;color:#94a3b8;font-weight:bold;padding:6px 8px;text-align:center;">${ch}</th>`;
-          });
-        });
-        html += `</tr>`;
-
-        // Data rows with alternating background
-        items.forEach((item, ri) => {
-          const bg = ri % 2 === 0 ? "#0f172a" : "#111827";
-          html += `<tr>`;
-          html += `<td style="${bs}background:${bg};color:#f1f5f9;font-weight:bold;padding:6px 10px;">${item.itemName || ""}</td>`;
-          html += `<td style="${bs}background:${bg};color:#cbd5e1;padding:6px 8px;text-align:center;">${item.group || ""}</td>`;
-          html += `<td style="${bs}background:${bg};color:#cbd5e1;padding:6px 8px;text-align:center;">${item.category || ""}</td>`;
-          allVariations.forEach((v) => {
-            CHANNELS.forEach((ch) => {
-              const val = getPrice(item, v, ch);
-              const color = val === "" ? "#4b5563" : "#e2e8f0";
-              html += `<td style="${bs}background:${bg};color:${color};padding:6px 8px;text-align:center;">${val === "" ? "-" : val}</td>`;
-            });
-          });
-          html += `</tr>`;
-        });
-
-        html += `</table>`;
-
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, "text/html");
-        const table = doc.querySelector("table")!;
-        const ws = XLSX.utils.table_to_sheet(table);
-
-        ws["!cols"] = [
-          { wch: 28 }, { wch: 14 }, { wch: 20 },
-          ...allVariations.flatMap(() => CHANNELS.map(() => ({ wch: 11 }))),
-        ];
-
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Item List");
-        XLSX.writeFile(wb, `item-list-${new Date().toISOString().split("T")[0]}.xlsx`);
-        console.log("✅ Item list downloaded with styling");
-      } catch (error: any) {
-        console.error("Error downloading item list:", error);
-        alert(`Failed to download: ${error.message}`);
-      }
-    };
-
-  const handleDownload = async () => {
     try {
-      setDownloading(true);
-      console.log("🔄 Starting optimized Excel export...");
-      
-      // Import XLSX dynamically
       const XLSX = await import("xlsx");
 
-      // Process items in chunks for better memory management
-      const chunkSize = 500;
-      const exportData: any[] = [];
-      
-      for (let i = 0; i < items.length; i += chunkSize) {
-        const chunk = items.slice(i, i + chunkSize);
-        console.log(`📊 Processing chunk ${Math.floor(i/chunkSize) + 1}/${Math.ceil(items.length/chunkSize)}`);
-        
-        const chunkData = chunk.flatMap((item) => {
-          if (!item.variations || item.variations.length === 0) {
-            return [{
-              "Item ID": item.itemId,
-              "Item Name": item.itemName,
-              "Group": item.group,
-              "Category": item.category,
-              "Short Code": item.shortCode || "",
-              "Description": item.description || "",
-              "HSN Code": item.hsnCode || "",
-              "Unit Type": item.unitType,
-              "Sale Type": item.saleType || "QTY",
-              "Profit Margin": item.profitMargin || 0,
-              "GST": item.gst || 0,
-              "Item Type": item.itemType,
-              "Variation Name": "",
-              "Variation Value": "",
-              "Base Price": "",
-              "Zomato Price": "",
-              "SAP Code": "",
-            }];
-          }
+      const isSizeVar = (val: string) =>
+        /\d/.test(val) || /^(piece|half|full|small|medium|large|regular)$/i.test(val.trim());
 
-          return item.variations.map((v: any) => {
+      const varPriority = (s: string) => {
+        const sl = s.toLowerCase().replace(/\s+/g, " ").trim();
+        if (sl === "1 kg" || sl === "1kg") return 0;
+        if (sl === "500 gms" || sl === "500gms" || sl === "500 gm" || sl === "500gm") return 1;
+        if (sl === "250 gms" || sl === "250gms" || sl === "250 gm" || sl === "250gm") return 2;
+        if (sl === "1000 gms" || sl === "1000gms" || sl === "1000 gm" || sl === "1000gm") return 3;
+        if (sl === "1 pc" || sl === "1pc" || sl === "1 piece") return 4;
+        if (/\d/.test(sl) && (sl.includes("gm") || sl.includes("kg"))) return 5;
+        return 6;
+      };
+
+      const allVariations = Array.from(
+        new Set(items.flatMap((item) => (item.variations || []).map((v: any) => String(v.value))))
+      )
+        .filter(isSizeVar)
+        .sort((a, b) => {
+          const pa = varPriority(a), pb = varPriority(b);
+          if (pa !== pb) return pa - pb;
+          const n = (s: string) => {
+            const num = parseFloat(s.match(/[\d.]+/)?.[0] || "0");
+            return s.toLowerCase().includes("kg") ? num * 1000 : num;
+          };
+          return n(a) - n(b);
+        });
+
+      const CHANNELS = ["Dining", "Parcal", "Swiggy", "Zomato"];
+
+      const getPrice = (item: any, varValue: string, channel: string): number | string => {
+        const v = (item.variations || []).find((x: any) => x.value === varValue);
+        if (!v) return "";
+        const stored = v.channels?.[channel];
+        let price = stored && stored > 0 ? stored : 0;
+        if (!price) {
+          if (channel === "Zomato" || channel === "Swiggy") price = Math.round((v.price * 1.15) / 5) * 5;
+          else price = v.price || 0;
+        }
+        return price > 0 ? price : "";
+      };
+
+      // Use JSON export for large datasets (more efficient than HTML parsing)
+      const exportData: any[] = [{
+        "Item Name": "Item Name",
+        "Group": "Group",
+        "Category": "Category",
+        ...allVariations.reduce((acc, v) => {
+          CHANNELS.forEach(ch => {
+            acc[`${v} - ${ch}`] = ch;
+          });
+          return acc;
+        }, {} as any)
+      }];
+
+      items.forEach((item) => {
+        const row: any = {
+          "Item Name": item.itemName || "",
+          "Group": item.group || "",
+          "Category": item.category || "",
+        };
+
+        allVariations.forEach((v) => {
+          CHANNELS.forEach((ch) => {
+            const price = getPrice(item, v, ch);
+            row[`${v} - ${ch}`] = price === "" ? "-" : price;
+          });
+        });
+
+        exportData.push(row);
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(exportData);
+      ws["!cols"] = [
+        { wch: 28 }, { wch: 14 }, { wch: 20 },
+        ...allVariations.flatMap(() => CHANNELS.map(() => ({ wch: 11 }))),
+      ];
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Item List");
+      XLSX.writeFile(wb, `item-list-${new Date().toISOString().split("T")[0]}.xlsx`);
+      console.log(`✅ Downloaded item list for ${items.length} items`);
+    } catch (error: any) {
+      console.error("Error downloading:", error);
+      alert(`Download failed: ${error.message}`);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (items.length === 0) {
+      alert("No items to export");
+      return;
+    }
+
+    try {
+      setDownloading(true);
+      const XLSX = await import("xlsx");
+
+      // Optimized: directly create rows array instead of chunking
+      const exportData: any[] = [];
+      const totalItems = items.length;
+
+      for (let i = 0; i < totalItems; i++) {
+        const item = items[i];
+
+        // Show minimal progress feedback every 100 items
+        if (i % 100 === 0 && i > 0) {
+          console.log(`Processing item ${i}/${totalItems}`);
+        }
+
+        if (!item.variations || item.variations.length === 0) {
+          exportData.push({
+            "Item ID": item.itemId || "",
+            "Item Name": item.itemName || "",
+            "Group": item.group || "",
+            "Category": item.category || "",
+            "Short Code": item.shortCode || "",
+            "Description": item.description || "",
+            "HSN Code": item.hsnCode || "",
+            "Unit Type": item.unitType || "",
+            "Sale Type": item.saleType || "QTY",
+            "Profit Margin": item.profitMargin || 0,
+            "GST": item.gst || 0,
+            "Item Type": item.itemType || "",
+            "Variation Name": "",
+            "Variation Value": "",
+            "Base Price": "",
+            "Zomato Price": "",
+            "SAP Code": "",
+          });
+        } else {
+          // Process variations
+          for (const v of item.variations) {
             const basePrice = v.price || 0;
-            return {
-              "Item ID": item.itemId,
-              "Item Name": item.itemName,
-              "Group": item.group,
-              "Category": item.category,
+            exportData.push({
+              "Item ID": item.itemId || "",
+              "Item Name": item.itemName || "",
+              "Group": item.group || "",
+              "Category": item.category || "",
               "Short Code": item.shortCode || "",
               "Description": item.description || "",
               "HSN Code": item.hsnCode || "",
-              "Unit Type": item.unitType,
+              "Unit Type": item.unitType || "",
               "Sale Type": v.saleType || item.saleType || "QTY",
               "Profit Margin": v.profitMargin || item.profitMargin || 0,
               "GST": item.gst || 0,
-              "Item Type": item.itemType,
-              "Variation Name": v.name,
-              "Variation Value": v.value,
+              "Item Type": item.itemType || "",
+              "Variation Name": v.name || "",
+              "Variation Value": v.value || "",
               "Base Price": basePrice || "",
               "Zomato Price": basePrice ? calcZomatoPrice(basePrice) : "",
               "SAP Code": v.sapCode || "",
-            };
-          });
-        });
-        
-        exportData.push(...chunkData);
+            });
+          }
+        }
       }
 
-      console.log(`📋 Processed ${exportData.length} rows for export`);
-
-      // Create worksheet with optimized settings
+      // Create worksheet
       const ws = XLSX.utils.json_to_sheet(exportData);
-      const colWidths = [18, 20, 12, 15, 12, 20, 10, 14, 10, 12, 8, 10, 14, 14, 11, 13, 10];
-      ws["!cols"] = colWidths.map((w) => ({ wch: w }));
+      ws["!cols"] = [18, 20, 12, 15, 12, 20, 10, 14, 10, 12, 8, 10, 14, 14, 11, 13, 10].map((w) => ({ wch: w }));
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Items");
 
       XLSX.writeFile(wb, `items-export-${new Date().toISOString().split("T")[0]}.xlsx`);
-      console.log("✅ Items exported to Excel successfully");
+      console.log(`✅ Exported ${exportData.length} rows`);
     } catch (error: any) {
-      console.error("Error exporting to Excel:", error);
-      alert(`Failed to export items: ${error.message || "Unknown error occurred"}`);
+      console.error("Error exporting:", error);
+      alert(`Export failed: ${error.message || "Unknown error"}`);
     } finally {
       setDownloading(false);
     }

@@ -58,17 +58,21 @@ export default function UploadTab({ type }: UploadTabProps) {
   useEffect(() => {
     let isMounted = true;
     let timeoutId: NodeJS.Timeout | null = null;
+    let retryTimeoutId: NodeJS.Timeout | null = null;
+    let controller: AbortController | null = null;
 
-    const fetchMonthStatus = async () => {
-      const controller = new AbortController();
+    const fetchMonthStatus = async (retryCount = 0) => {
+      controller = new AbortController();
+      const MAX_RETRIES = 2;
+      const TIMEOUT_MS = 8000; // 8 seconds
 
       try {
-        console.log(`Fetching month status for ${type} year ${selectedYear}`);
-
-        // Add a timeout for the fetch request (30 seconds)
+        // Add a timeout for the fetch request
         timeoutId = setTimeout(() => {
-          controller.abort();
-        }, 30000);
+          if (controller && !controller.signal.aborted) {
+            controller.abort();
+          }
+        }, TIMEOUT_MS);
 
         const response = await fetch(`/api/uploads?type=${type}&year=${selectedYear}`, {
           signal: controller.signal
@@ -80,19 +84,17 @@ export default function UploadTab({ type }: UploadTabProps) {
         }
 
         if (!response.ok) {
-          console.warn(`API returned status ${response.status}`);
-          if (isMounted) {
-            setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
-              month: i + 1,
-              status: "pending" as const
-            })));
-          }
-          return;
+          throw new Error(`API returned status ${response.status}`);
         }
 
         const data = await response.json();
         if (isMounted && data.data && Array.isArray(data.data)) {
           setMonthsStatus(data.data);
+        } else if (isMounted) {
+          setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
+            month: i + 1,
+            status: "pending" as const
+          })));
         }
       } catch (error) {
         if (timeoutId) {
@@ -101,14 +103,24 @@ export default function UploadTab({ type }: UploadTabProps) {
         }
 
         if (error instanceof Error && error.name === "AbortError") {
-          // Silently ignore abort errors (timeout or cleanup)
+          if (retryCount < MAX_RETRIES && isMounted) {
+            console.warn(`Month status fetch timeout, retrying...`);
+            retryTimeoutId = setTimeout(() => {
+              if (isMounted) {
+                fetchMonthStatus(retryCount + 1);
+              }
+            }, 500 * (retryCount + 1));
+          } else if (isMounted) {
+            setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
+              month: i + 1,
+              status: "pending" as const
+            })));
+          }
           return;
         }
 
-        // Only log if not cleaned up
         if (isMounted) {
-          console.error("Failed to fetch month status:", error);
-          // Set default pending status on fetch error - don't block UI
+          console.warn("Failed to fetch month status");
           setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
             month: i + 1,
             status: "pending" as const
@@ -121,8 +133,10 @@ export default function UploadTab({ type }: UploadTabProps) {
 
     return () => {
       isMounted = false;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (retryTimeoutId) clearTimeout(retryTimeoutId);
+      if (controller && !controller.signal.aborted) {
+        controller.abort();
       }
     };
   }, [type, selectedYear]);
@@ -379,23 +393,31 @@ export default function UploadTab({ type }: UploadTabProps) {
     }
   };
 
-  // Sequential chunked upload - 1 chunk at a time for server stability
+  // Sequential chunked upload - optimized for large data
   const uploadInChunks = async (
     uploadBody: any,
     isUpdate: boolean = false
   ): Promise<boolean> => {
     const totalRows = uploadBody.rows;
-    const CHUNK_SIZE = 50000; // Increased from 10000 to 50000 rows per chunk
-    const DELAY_BETWEEN_CHUNKS = 1000; // Reduced from 20 seconds to 1 second
+    // Adaptive chunk size based on file size
+    const estimatedBytesPerRow = 500; // Conservative estimate
+    const totalEstimatedBytes = totalRows * estimatedBytesPerRow;
+    const CHUNK_SIZE = totalEstimatedBytes > 50_000_000 // > 50MB
+      ? 20000  // Smaller chunks for very large files
+      : totalEstimatedBytes > 20_000_000 // > 20MB
+      ? 50000
+      : 100000; // Larger chunks for smaller files
+
+    const DELAY_BETWEEN_CHUNKS = 200; // Minimal delay for fast uploads
     const data = uploadBody.data as any[];
     const headers = data[0];
     const dataRows = data.slice(1);
 
     const numChunks = Math.ceil(dataRows.length / CHUNK_SIZE);
-    console.log(`📦 Starting sequential chunked upload: ${totalRows} rows, ${numChunks} chunks of ${CHUNK_SIZE} rows each`);
+    console.log(`📦 Starting upload: ${totalRows} rows, ${numChunks} chunks (${CHUNK_SIZE} rows each)`);
 
     try {
-      // Upload chunks ONE AT A TIME (sequential, not parallel)
+      // Upload chunks sequentially with smart retry strategy
       for (let chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
         const startIdx = chunkIndex * CHUNK_SIZE;
         const endIdx = Math.min(startIdx + CHUNK_SIZE, dataRows.length);
@@ -416,22 +438,27 @@ export default function UploadTab({ type }: UploadTabProps) {
           delete chunkBody.validRowIndices;
         }
 
-        console.log(`📤 Uploading chunk ${chunkIndex + 1}/${numChunks} (rows ${startIdx + 1}-${endIdx})`);
+        console.log(`📤 Chunk ${chunkIndex + 1}/${numChunks}`);
         setMessage({
           type: "warning",
-          text: `Uploading chunk ${chunkIndex + 1}/${numChunks}... (${Math.round(((chunkIndex + 1) / numChunks) * 100)}% complete)`
+          text: `Uploading chunk ${chunkIndex + 1}/${numChunks}... (${Math.round(((chunkIndex + 1) / numChunks) * 100)}%)`
         });
 
-        // Upload single chunk with retry logic
+        // Upload single chunk with smart retry logic
         let retryCount = 0;
-        const MAX_RETRIES = 5;
+        const MAX_RETRIES = 3;
         let chunkSuccess = false;
 
         while (retryCount < MAX_RETRIES && !chunkSuccess) {
           try {
             const controller = new AbortController();
-            const timeoutMs = 300000; // Increased to 5 minutes for larger chunks
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            // Timeout: 30s base + 10s per 10000 rows
+            const timeoutMs = 30000 + (chunkRows / 10000) * 10000;
+            const timeoutId = setTimeout(() => {
+              if (!controller.signal.aborted) {
+                controller.abort();
+              }
+            }, timeoutMs);
 
             const method = isUpdate && chunkIndex === 0 ? "PUT" : "POST";
             const endpoint = isUpdate && chunkIndex === 0 ? "/api/upload" : "/api/upload/chunk";
@@ -477,14 +504,14 @@ export default function UploadTab({ type }: UploadTabProps) {
           } catch (error) {
             retryCount++;
             const errorMsg = error instanceof Error ? error.message : String(error);
-            console.error(`❌ Chunk ${chunkIndex + 1} attempt ${retryCount} failed:`, errorMsg);
+            console.error(`❌ Chunk ${chunkIndex + 1} attempt ${retryCount}/${MAX_RETRIES} failed:`, errorMsg);
 
             if (retryCount < MAX_RETRIES) {
-              const waitMs = 1000 * retryCount; // Reduced from 3s to 1s multiplier
-              console.log(`  Retrying in ${waitMs}ms...`);
+              // Exponential backoff: 500ms, 1s, 2s, etc.
+              const waitMs = 500 * Math.pow(2, retryCount - 1);
               setMessage({
                 type: "warning",
-                text: `Chunk failed. Retrying in ${waitMs / 1000}s... (Attempt ${retryCount + 1}/${MAX_RETRIES})`
+                text: `Chunk error. Retrying in ${(waitMs / 1000).toFixed(1)}s...`
               });
               await new Promise(resolve => setTimeout(resolve, waitMs));
             } else {
@@ -533,18 +560,26 @@ export default function UploadTab({ type }: UploadTabProps) {
 
     // Refresh status after a moment
     setTimeout(() => {
-      try {
-        fetch(`/api/uploads?type=${type}&year=${selectedYear}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.data) {
-              setMonthsStatus(data.data);
-            }
-          })
-          .catch(err => console.error("Failed to refresh status:", err));
-      } catch (e) {
-        console.error("Failed to refresh status:", e);
-      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      fetch(`/api/uploads?type=${type}&year=${selectedYear}`, { signal: controller.signal })
+        .then(res => {
+          clearTimeout(timeoutId);
+          if (res.ok) return res.json();
+          throw new Error(`Status ${res.status}`);
+        })
+        .then(data => {
+          if (data.data) {
+            setMonthsStatus(data.data);
+          }
+        })
+        .catch(err => {
+          clearTimeout(timeoutId);
+          if (err instanceof Error && err.name !== "AbortError") {
+            console.warn("Failed to refresh status:", err);
+          }
+        });
     }, 1000);
   };
 
@@ -577,18 +612,26 @@ export default function UploadTab({ type }: UploadTabProps) {
 
     // Refresh status after a moment
     setTimeout(() => {
-      try {
-        fetch(`/api/uploads?type=${type}&year=${selectedYear}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.data) {
-              setMonthsStatus(data.data);
-            }
-          })
-          .catch(err => console.error("Failed to refresh status:", err));
-      } catch (e) {
-        console.error("Failed to refresh status:", e);
-      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      fetch(`/api/uploads?type=${type}&year=${selectedYear}`, { signal: controller.signal })
+        .then(res => {
+          clearTimeout(timeoutId);
+          if (res.ok) return res.json();
+          throw new Error(`Status ${res.status}`);
+        })
+        .then(data => {
+          if (data.data) {
+            setMonthsStatus(data.data);
+          }
+        })
+        .catch(err => {
+          clearTimeout(timeoutId);
+          if (err instanceof Error && err.name !== "AbortError") {
+            console.warn("Failed to refresh status:", err);
+          }
+        });
     }, 1000);
   };
 
